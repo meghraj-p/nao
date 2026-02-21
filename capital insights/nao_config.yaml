@@ -1,0 +1,19 @@
+project_name: capital insights
+databases:
+- type: postgres
+  name: postgres-prod
+  include: []
+  exclude: []
+  accessors:
+  - columns
+  - description
+  - preview
+  host: ${{ env('AWS_RDS_ENDPOINT') }}
+  port: 5432
+  database: postgres
+  user: ${{ env('AWS_READONLY_DB_USERNAME') }}
+  password: ${{ env('AWS_READONLY_DB_PASSWORD') }}
+repos: []
+llm:
+  provider: openai
+  api_key: ${{ env('OPENAI_API_KEY') }}

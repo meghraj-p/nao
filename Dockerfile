@@ -66,7 +66,7 @@ COPY cli ./cli
 
 # Install nao_core package and dependencies (non-editable for portability)
 WORKDIR /app/cli
-RUN uv pip install --system .
+RUN uv pip install --system . psycopg-binary
 
 # =============================================================================
 # STAGE 5: Runtime image
@@ -128,6 +128,10 @@ RUN mkdir -p /app/context && chown -R nao:nao /app/context
 
 # Set ownership
 RUN chown -R nao:nao /app /var/log/supervisor
+
+# Ensure libpq can access the .postgresql directory (avoids "Permission denied" on cert lookup)
+RUN mkdir -p /root/.postgresql && chmod 700 /root/.postgresql && \
+    mkdir -p /home/nao/.postgresql && chown nao:nao /home/nao/.postgresql && chmod 700 /home/nao/.postgresql
 
 # Environment variables
 ENV MODE=prod
