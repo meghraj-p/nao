@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
 	BarChart,
 	Bar,
@@ -52,7 +52,7 @@ function ScatterChartTooltipContent({
 	if (!active || !first?.payload) {
 		return null;
 	}
-	const row = first.payload as Record<string, unknown>;
+	const row = first.payload;
 	const header = row[labelKey] ?? row[xAxisKey];
 	return (
 		<div className='border-border/50 bg-background min-w-32 rounded-lg border px-2.5 py-1.5 text-xs shadow-xl'>
@@ -97,6 +97,34 @@ export const DisplayChartToolCall = ({ toolPart }: ToolCallComponentProps<'displ
 		return filterByDateRange(sourceData.data, config.x_axis_key, dataRange);
 	}, [sourceData?.data, config, dataRange]);
 
+	const chartContent = useMemo(
+		() =>
+			config && sourceData?.data?.length && config.series.length > 0 ? (
+				<div className='flex flex-col items-center my-4 gap-2 aspect-3/2'>
+					<span className='text-sm font-medium'>{config.title}</span>
+					{config.chart_type !== 'pie' && config.x_axis_type === 'date' && (
+						<div className='flex w-full justify-end items-center'>
+							<ChartRangeSelector
+								options={DATE_RANGE_OPTIONS}
+								selectedRange={dataRange}
+								onRangeSelected={(range) => setDataRange(range)}
+							/>
+						</div>
+					)}
+
+					<ChartDisplay
+						data={filteredData}
+						chartType={config.chart_type}
+						xAxisKey={config.x_axis_key}
+						series={config.series}
+						xAxisType={config.x_axis_type === 'number' ? 'number' : 'category'}
+						labelKey={config.chart_type === 'scatter' ? (config.label_key ?? config.x_axis_key) : undefined}
+					/>
+				</div>
+			) : null,
+		[config, filteredData, dataRange, sourceData?.data?.length],
+	);
+
 	if (output && output.error) {
 		return (
 			<ToolCallWrapper defaultExpanded title='Could not display the chart'>
@@ -140,31 +168,7 @@ export const DisplayChartToolCall = ({ toolPart }: ToolCallComponentProps<'displ
 		);
 	}
 
-	return (
-		<div className='flex flex-col items-center my-4 gap-2 aspect-3/2'>
-			<span className='text-sm font-medium'>{config.title}</span>
-			{config.chart_type !== 'pie' && config.x_axis_type === 'date' && (
-				<div className='flex w-full justify-end items-center'>
-					<ChartRangeSelector
-						options={DATE_RANGE_OPTIONS}
-						selectedRange={dataRange}
-						onRangeSelected={(range) => setDataRange(range)}
-					/>
-				</div>
-			)}
-
-			<ChartDisplay
-				data={filteredData}
-				chartType={config.chart_type}
-				xAxisKey={config.x_axis_key}
-				series={config.series}
-				xAxisType={config.x_axis_type === 'number' ? 'number' : 'category'}
-				labelKey={
-					config.chart_type === 'scatter' ? (config.label_key ?? config.x_axis_key) : undefined
-				}
-			/>
-		</div>
-	);
+	return chartContent;
 };
 
 export interface ChartDisplayProps {
@@ -179,7 +183,7 @@ export interface ChartDisplayProps {
 	labelKey?: string;
 }
 
-export const ChartDisplay = ({
+export const ChartDisplay = React.memo(function ChartDisplay({
 	data,
 	chartType,
 	xAxisKey,
@@ -189,7 +193,7 @@ export const ChartDisplay = ({
 	title,
 	showGrid = true,
 	labelKey,
-}: ChartDisplayProps) => {
+}: ChartDisplayProps) {
 	const { visibleSeries, hiddenSeriesKeys, handleToggleSeriesVisibility } = useSeriesVisibility(series);
 
 	/** Recharts config for series labels and colors */
@@ -467,21 +471,21 @@ export const ChartDisplay = ({
 			</ChartContainer>
 		</div>
 	);
-};
+});
 
 /** Manages which series are visible and hidden */
 const useSeriesVisibility = (series: displayChart.SeriesConfig[]) => {
 	const [hiddenSeriesKeys, setHiddenSeriesKeys] = useState<Set<string>>(new Set());
 
-	// Keep hidden series keys in sync with the series config
+	const seriesKeysStr = useMemo(() => JSON.stringify(series.map((s) => s.data_key).sort()), [series]);
+
+	// Keep hidden series keys in sync with the series config (use stable dep to avoid update loop during streaming)
 	useEffect(() => {
-		setHiddenSeriesKeys(
-			(prev) =>
-				new Set(
-					series.map((s) => (prev.has(s.data_key) ? s.data_key : undefined)).filter((i) => i !== undefined),
-				),
-		);
-	}, [series]);
+		setHiddenSeriesKeys((prev) => {
+			const keys = new Set(series.map((s) => s.data_key));
+			return new Set([...prev].filter((k) => keys.has(k)));
+		});
+	}, [seriesKeysStr]); // eslint-disable-line react-hooks/exhaustive-deps -- seriesKeysStr is stable proxy for series
 
 	const visibleSeries = useMemo(
 		() => series.filter((s) => !hiddenSeriesKeys.has(s.data_key)),

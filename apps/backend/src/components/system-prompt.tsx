@@ -57,6 +57,16 @@ export function SystemPrompt({ memories = [] }: { memories: UserMemory[] }) {
 					researching.
 				</ListItem>
 				<ListItem>If you can execute a SQL query, use the execute_sql tool for it.</ListItem>
+				<ListItem>
+					When using display_chart, use the query_id from the execute_sql output that contains the data you
+					want to chart. The query_id appears as "Query ID: query_xxx" in the output. Copy it exactly and
+					verify it matches the data before charting.
+				</ListItem>
+				<ListItem>
+					For line and area charts, return data in wide format: one row per x-axis value (e.g. date) with
+					separate columns for each series. Avoid long format (one row per series per x-value) as it produces
+					overlapping or blank charts.
+				</ListItem>
 			</List>
 
 			<Title level={2}>How nao Works</Title>

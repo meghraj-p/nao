@@ -110,8 +110,7 @@ class MemoryService {
 				return [];
 			}
 
-			const id =
-				memory.id && memory.id.length > 0 && previousIds.has(memory.id) ? memory.id : undefined;
+			const id = memory.id && memory.id.length > 0 && previousIds.has(memory.id) ? memory.id : undefined;
 			return [{ id, userId: opts.userId, content, category: memory.category, chatId: opts.chatId }];
 		});
 

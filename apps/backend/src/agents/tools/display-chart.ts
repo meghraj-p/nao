@@ -4,7 +4,8 @@ import { tool } from 'ai';
 import { DisplayChartOutput, renderToModelOutput } from '../../components/tool-outputs';
 
 export default tool<displayChart.Input, displayChart.Output>({
-	description: 'Display a chart visualization of the data from a previous `execute_sql` tool call.',
+	description:
+		'Display a chart visualization of the data from a previous execute_sql tool call. For line and area charts, the SQL result must be in wide format: one row per x-axis value (e.g. date) with separate columns for each series to plot. Long format (one row per series per x-value) will not render correctly.',
 	inputSchema: displayChart.InputSchema,
 	outputSchema: displayChart.OutputSchema,
 

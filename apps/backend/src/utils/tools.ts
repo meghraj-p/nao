@@ -16,9 +16,7 @@ const REPO_ROOT = path.resolve(_dirname, '..', '..', '..', '..');
  * Relative paths are resolved against the repo root (monorepo root).
  */
 export const resolveProjectFolder = (projectPath: string): string => {
-	const resolved = path.isAbsolute(projectPath)
-		? path.resolve(projectPath)
-		: path.resolve(REPO_ROOT, projectPath);
+	const resolved = path.isAbsolute(projectPath) ? path.resolve(projectPath) : path.resolve(REPO_ROOT, projectPath);
 	return resolved;
 };
 
