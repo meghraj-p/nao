@@ -11,4 +11,4 @@
 
 ## Description
 
-_No description available._
+This table contains quarterly shareholding patterns for listed companies. The values represent the percentage of shares held by different categories of shareholders.

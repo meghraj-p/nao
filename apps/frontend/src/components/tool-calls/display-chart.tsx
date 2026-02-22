@@ -1,5 +1,25 @@
 import { useEffect, useMemo, useState } from 'react';
-import { BarChart, Bar, AreaChart, Area, PieChart, Pie, XAxis, YAxis, CartesianGrid } from 'recharts';
+import {
+	BarChart,
+	Bar,
+	AreaChart,
+	Area,
+	PieChart,
+	Pie,
+	ScatterChart,
+	Scatter,
+	RadarChart,
+	Radar,
+	RadialBarChart,
+	RadialBar,
+	XAxis,
+	YAxis,
+	CartesianGrid,
+	PolarGrid,
+	PolarAngleAxis,
+	PolarRadiusAxis,
+	LabelList,
+} from 'recharts';
 import { useAgentContext } from '../../contexts/agent.provider';
 import { ChartContainer, ChartTooltip, ChartTooltipContent, ChartLegend, ChartLegendContent } from '../ui/chart';
 import { TextShimmer } from '../ui/text-shimmer';
@@ -14,6 +34,40 @@ import type { DateRange } from '@/lib/charts.utils';
 import { labelize, filterByDateRange, DATE_RANGE_OPTIONS, toKey } from '@/lib/charts.utils';
 
 const Colors = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)', 'var(--chart-5)'];
+
+function ScatterChartTooltipContent({
+	active,
+	payload,
+	labelKey,
+	xAxisKey,
+	series,
+}: {
+	active?: boolean;
+	payload?: Array<{ payload?: Record<string, unknown>; dataKey?: string | number; value?: unknown }>;
+	labelKey: string;
+	xAxisKey: string;
+	series: displayChart.SeriesConfig[];
+}) {
+	const first = payload?.[0];
+	if (!active || !first?.payload) {
+		return null;
+	}
+	const row = first.payload as Record<string, unknown>;
+	const header = row[labelKey] ?? row[xAxisKey];
+	return (
+		<div className='border-border/50 bg-background min-w-32 rounded-lg border px-2.5 py-1.5 text-xs shadow-xl'>
+			<div className='mb-1.5 font-medium'>{labelize(header)}</div>
+			<div className='grid gap-1'>
+				{series.map((s) => (
+					<div key={s.data_key} className='flex justify-between gap-4'>
+						<span className='text-muted-foreground'>{s.label || labelize(s.data_key)}</span>
+						<span className='font-mono tabular-nums'>{String(row[s.data_key] ?? '')}</span>
+					</div>
+				))}
+			</div>
+		</div>
+	);
+}
 
 export const DisplayChartToolCall = ({ toolPart }: ToolCallComponentProps<'display_chart'>) => {
 	const { messages } = useAgentContext();
@@ -105,6 +159,9 @@ export const DisplayChartToolCall = ({ toolPart }: ToolCallComponentProps<'displ
 				xAxisKey={config.x_axis_key}
 				series={config.series}
 				xAxisType={config.x_axis_type === 'number' ? 'number' : 'category'}
+				labelKey={
+					config.chart_type === 'scatter' ? (config.label_key ?? config.x_axis_key) : undefined
+				}
 			/>
 		</div>
 	);
@@ -119,6 +176,7 @@ export interface ChartDisplayProps {
 	series: displayChart.SeriesConfig[];
 	title?: string;
 	showGrid?: boolean;
+	labelKey?: string;
 }
 
 export const ChartDisplay = ({
@@ -130,12 +188,13 @@ export const ChartDisplay = ({
 	series,
 	title,
 	showGrid = true,
+	labelKey,
 }: ChartDisplayProps) => {
 	const { visibleSeries, hiddenSeriesKeys, handleToggleSeriesVisibility } = useSeriesVisibility(series);
 
 	/** Recharts config for series labels and colors */
 	const chartConfig = useMemo((): ChartConfig => {
-		if (chartType === 'pie') {
+		if (chartType === 'pie' || chartType === 'radial_bar') {
 			const values = new Set(data.map((item) => String(item[xAxisKey])));
 			return [...values].reduce(
 				(acc, v, index) => {
@@ -242,6 +301,123 @@ export const ChartDisplay = ({
 						content={<ChartLegendContent onItemClick={handleToggleSeriesVisibility} />}
 					/>
 				</Chart>
+			);
+		}
+
+		if (chartType === 'scatter') {
+			const scatterLabelKey = labelKey ?? xAxisKey;
+			const legendPayload = series.map((s, idx) => ({
+				value: s.label || labelize(s.data_key),
+				dataKey: s.data_key,
+				color: s.color || Colors[idx % Colors.length],
+				isHidden: hiddenSeriesKeys.has(s.data_key),
+			}));
+
+			return (
+				<ScatterChart data={data} accessibilityLayer {...opts.chart}>
+					{showGrid && <CartesianGrid strokeDasharray='3 3' />}
+					<XAxis
+						dataKey={xAxisKey}
+						type={xAxisType}
+						tickLine={true}
+						tickMargin={10}
+						axisLine={false}
+						minTickGap={12}
+						tickFormatter={(value) => xAxisLabelFormatter?.(value) || labelize(value)}
+					/>
+					<YAxis type='number' tickLine={false} axisLine={false} minTickGap={12} />
+					<ChartTooltip
+						{...opts.tooltip}
+						content={({ active, payload }) => (
+							<ScatterChartTooltipContent
+								active={active}
+								payload={payload}
+								labelKey={scatterLabelKey}
+								xAxisKey={xAxisKey}
+								series={visibleSeries}
+							/>
+						)}
+					/>
+					{visibleSeries.map((s) => (
+						<Scatter
+							key={s.data_key}
+							dataKey={s.data_key}
+							fill={`var(--color-${s.data_key})`}
+							name={s.label || labelize(s.data_key)}
+							isAnimationActive={false}
+						>
+							<LabelList
+								dataKey={scatterLabelKey}
+								position='top'
+								formatter={(v: unknown) => (v != null ? labelize(v) : '')}
+								style={{ pointerEvents: 'none' }}
+							/>
+						</Scatter>
+					))}
+					<ChartLegend
+						payload={legendPayload}
+						content={<ChartLegendContent onItemClick={handleToggleSeriesVisibility} />}
+					/>
+				</ScatterChart>
+			);
+		}
+
+		if (chartType === 'radar') {
+			const legendPayload = series.map((s, idx) => ({
+				value: s.label || labelize(s.data_key),
+				dataKey: s.data_key,
+				color: s.color || Colors[idx % Colors.length],
+				isHidden: hiddenSeriesKeys.has(s.data_key),
+			}));
+
+			return (
+				<RadarChart data={data} cx='50%' cy='50%' outerRadius='70%' accessibilityLayer>
+					<PolarGrid />
+					<PolarAngleAxis dataKey={xAxisKey} tickFormatter={(value) => labelize(value)} />
+					<PolarRadiusAxis />
+					<ChartTooltip
+						{...opts.tooltip}
+						content={<ChartTooltipContent labelFormatter={(value) => labelize(value)} />}
+					/>
+					{visibleSeries.map((s) => (
+						<Radar
+							key={s.data_key}
+							dataKey={s.data_key}
+							stroke={`var(--color-${s.data_key})`}
+							fill={`var(--color-${s.data_key})`}
+							fillOpacity={0.5}
+							name={s.label || labelize(s.data_key)}
+							isAnimationActive={false}
+						/>
+					))}
+					<ChartLegend
+						payload={legendPayload}
+						content={<ChartLegendContent onItemClick={handleToggleSeriesVisibility} />}
+					/>
+				</RadarChart>
+			);
+		}
+
+		if (chartType === 'radial_bar') {
+			const dataKey = series[0].data_key;
+			const dataWithColors = data.map((item) => ({
+				...item,
+				fill: `var(--color-${toKey(String(item[xAxisKey]))})`,
+			}));
+
+			return (
+				<RadialBarChart
+					data={dataWithColors}
+					cx='50%'
+					cy='50%'
+					innerRadius='20%'
+					outerRadius='70%'
+					accessibilityLayer
+				>
+					<PolarAngleAxis dataKey={xAxisKey} tickFormatter={(value) => labelize(value)} />
+					<RadialBar dataKey={dataKey} background />
+					<ChartTooltip {...opts.tooltip} content={<ChartTooltipContent />} />
+				</RadialBarChart>
 			);
 		}
 

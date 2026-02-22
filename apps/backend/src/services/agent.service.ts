@@ -29,6 +29,7 @@ import {
 	retrieveProjectById,
 } from '../utils/ai';
 import { getDefaultModelId, getEnvApiKey, getEnvModelSelections, ModelSelection } from '../utils/llm';
+import { resolveProjectFolder } from '../utils/tools';
 import { memoryService } from './memory';
 import { skillService } from './skill.service';
 
@@ -115,7 +116,7 @@ export class AgentService {
 			throw Error('Project path does not exist.');
 		}
 		return {
-			projectFolder: project.path ?? '',
+			projectFolder: resolveProjectFolder(project.path),
 		};
 	}
 

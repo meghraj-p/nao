@@ -7,6 +7,7 @@ import { ModelSelection } from '../services/agent.service';
 import { TestAgentService, testAgentService } from '../services/test-agent.service';
 import { llmProviderSchema } from '../types/llm';
 import { retrieveProjectById } from '../utils/ai';
+import { resolveProjectFolder } from '../utils/tools';
 
 const modelSelectionSchema = z.object({
 	provider: llmProviderSchema,
@@ -50,7 +51,7 @@ export const testRoutes = async (app: App) => {
 				if (sql) {
 					const { data: expectedData, columns: expectedColumns } = await executeQuery(
 						{ sql_query: sql },
-						{ projectFolder: project.path! },
+						{ projectFolder: resolveProjectFolder(project.path!) },
 					);
 					const { data } = await testAgentService.runVerification(
 						projectId,

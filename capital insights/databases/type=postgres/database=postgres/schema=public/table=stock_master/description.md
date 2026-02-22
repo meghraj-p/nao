@@ -11,4 +11,4 @@
 
 ## Description
 
-_No description available._
+This table includes master data for stocks such as symbol, company name, ISIN, categorization (small/mid/large-cap), market capitalisation, sector, and industry; updated daily.

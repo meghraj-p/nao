@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 
 import { env } from '../env';
+import { resolveProjectFolder } from '../utils/tools';
 
 /**
  * Reads user-defined rules from RULES.md in the project folder if it exists
@@ -13,7 +14,7 @@ export function getUserRules(): string | null {
 		return null;
 	}
 
-	const rulesPath = join(projectFolder, 'RULES.md');
+	const rulesPath = join(resolveProjectFolder(projectFolder), 'RULES.md');
 
 	if (!existsSync(rulesPath)) {
 		return null;
@@ -40,7 +41,7 @@ export function getConnections(): Connection[] | null {
 		return null;
 	}
 
-	const databasesPath = join(projectFolder, 'databases');
+	const databasesPath = join(resolveProjectFolder(projectFolder), 'databases');
 
 	if (!existsSync(databasesPath)) {
 		return null;

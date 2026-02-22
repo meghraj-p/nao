@@ -223,4 +223,36 @@ export const ensureOrganizationSetup = async (): Promise<void> => {
 
 	// Assign any orphaned projects (projects without org) to the default org
 	await db.update(s.project).set({ orgId: org.id }).where(isNull(s.project.orgId)).execute();
+
+	// Ensure default project exists and all org members have access when NAO_DEFAULT_PROJECT_PATH is set
+	const projectPath = env.NAO_DEFAULT_PROJECT_PATH;
+	if (projectPath) {
+		let project = await projectQueries.getProjectByPath(projectPath);
+		if (!project) {
+			const projectName = projectPath.split(/[/\\]/).pop() || projectPath || 'Default Project';
+			project = await projectQueries.createProject({
+				name: projectName,
+				type: 'local',
+				path: projectPath,
+				orgId: org.id,
+			});
+		}
+
+		const orgMembers = await db
+			.select({ userId: s.orgMember.userId })
+			.from(s.orgMember)
+			.where(eq(s.orgMember.orgId, org.id))
+			.execute();
+
+		for (const { userId } of orgMembers) {
+			const existingMember = await projectQueries.getProjectMember(project.id, userId);
+			if (!existingMember) {
+				await projectQueries.addProjectMember({
+					projectId: project.id,
+					userId,
+					role: userId === firstUser.id ? 'admin' : 'user',
+				});
+			}
+		}
+	}
 };

@@ -1,6 +1,6 @@
 import z from 'zod/v3';
 
-export const ChartTypeEnum = z.enum(['bar', 'stacked_bar', 'line', 'pie']);
+export const ChartTypeEnum = z.enum(['bar', 'stacked_bar', 'line', 'pie', 'scatter', 'radar', 'radial_bar']);
 
 export const XAxisTypeEnum = z.enum(['date', 'number', 'category']);
 
@@ -21,6 +21,12 @@ export const InputSchema = z.object({
 		.array(SeriesConfigSchema)
 		.min(1)
 		.describe('Columns to plot as data series (at least one series required).'),
+	label_key: z
+		.string()
+		.optional()
+		.describe(
+			'Column name for point labels (e.g. company name). Used for scatter point labels and tooltip header. Defaults to x_axis_key when omitted.',
+		),
 	title: z
 		.string()
 		.describe(

@@ -99,7 +99,7 @@ class MemoryService {
 		newMemories: Memory[];
 	}): Promise<void> {
 		const previousIds = new Set(opts.previousMemories.map((m) => m.id));
-		const newIds = new Set(opts.newMemories.filter((m) => m.id).map((m) => m.id!));
+		const newIds = new Set(opts.newMemories.filter((m) => m.id && m.id.length > 0).map((m) => m.id!));
 
 		const toDeleteIds = Array.from(previousIds).filter((id) => !newIds.has(id));
 		await memoryQueries.deleteMemories(toDeleteIds);
@@ -110,7 +110,8 @@ class MemoryService {
 				return [];
 			}
 
-			const id = memory.id && previousIds.has(memory.id) ? memory.id : undefined;
+			const id =
+				memory.id && memory.id.length > 0 && previousIds.has(memory.id) ? memory.id : undefined;
 			return [{ id, userId: opts.userId, content, category: memory.category, chatId: opts.chatId }];
 		});
 
@@ -127,7 +128,7 @@ class MemoryService {
 }
 
 const MemorySchema = z.object({
-	id: z.string().optional(),
+	id: z.string().describe('Original id for existing memories; use empty string for new memories.'),
 	content: z.string().min(1),
 	category: z.enum(MEMORY_CATEGORIES),
 });
@@ -142,7 +143,7 @@ Return the complete, updated memory list. For each memory you can:
 - Keep it unchanged — include it with its original id
 - Update its content — include it with its original id and the new content
 - Delete it — omit it from the returned list
-- Add a new one — include it without an id
+- Add a new one — include it with id set to empty string ""
 - Merge two related memories into one — keep one id, drop the other, combine their content
 
 Write each memory as a direct instruction to the agent, not as a fact about the user.

@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 load_dotenv()
 
-cli_path = Path(__file__).parent.parent.parent / "cli"
+cli_path = Path(__file__).parent.parent.parent.parent / "cli"
 sys.path.insert(0, str(cli_path))
 
 from nao_core.config import NaoConfig, NaoConfigError
@@ -283,5 +283,16 @@ async def execute_sql(request: ExecuteSQLRequest):
 if __name__ == "__main__":
     nao_project_folder = os.getenv("NAO_DEFAULT_PROJECT_PATH")
     if nao_project_folder:
-        os.chdir(nao_project_folder)
+        project_path = Path(nao_project_folder)
+        if not project_path.is_absolute():
+            repo_root = cli_path.parent
+            project_path = (repo_root / nao_project_folder).resolve()
+        else:
+            project_path = project_path.resolve()
+        if not project_path.exists():
+            raise FileNotFoundError(
+                f"NAO_DEFAULT_PROJECT_PATH does not exist: {project_path}\n"
+                f"Set NAO_DEFAULT_PROJECT_PATH in .env to an absolute path or a path relative to the repo root ({cli_path.parent})"
+            )
+        os.chdir(project_path)
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)

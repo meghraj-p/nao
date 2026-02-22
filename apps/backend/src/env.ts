@@ -1,13 +1,13 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import dotenv from 'dotenv';
 import { z } from 'zod';
 
-// Loads .env file at the root of the repository
-dotenv.config({
-	path: path.join(process.cwd(), '..', '..', '.env'),
-});
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(__dirname, '..', '..', '..');
+dotenv.config({ path: path.join(repoRoot, '.env') });
 
 const envSchema = z.object({
 	MODE: z.enum(['dev', 'prod', 'test']).default('dev'),

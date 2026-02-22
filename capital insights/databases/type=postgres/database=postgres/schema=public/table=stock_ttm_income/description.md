@@ -11,4 +11,4 @@
 
 ## Description
 
-_No description available._
+This table contains trailing twelve months (TTM) income statements of listed companies. The values are in Crores INR except for 'year_ending' column which contains the last date of the TTM period in datetime format.

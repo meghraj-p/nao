@@ -11,4 +11,4 @@
 
 ## Description
 
-_No description available._
+This table contains daily Price to Earnings (PE), Price to Book Value (PB), and Price to Earnings to Growth (PEG) ratios of listed companies. The 'date' column contains the date in datetime format.

@@ -11,4 +11,4 @@
 
 ## Description
 
-_No description available._
+This table contains quarterly income statements of listed companies. The values are in Crores INR except for 'quarter_ending' column which contains the last date of the quarter in datetime format.

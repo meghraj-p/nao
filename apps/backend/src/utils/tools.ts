@@ -2,10 +2,25 @@ import { Tool, tool } from 'ai';
 import fs from 'fs';
 import { minimatch } from 'minimatch';
 import path from 'path';
+import { fileURLToPath } from 'url';
 
 import { ToolContext } from '../types/tools';
 
 const MCP_TOOL_SEPARATOR = '__';
+
+const _dirname = path.dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = path.resolve(_dirname, '..', '..', '..', '..');
+
+/**
+ * Resolves a project path (relative or absolute) to an absolute path.
+ * Relative paths are resolved against the repo root (monorepo root).
+ */
+export const resolveProjectFolder = (projectPath: string): string => {
+	const resolved = path.isAbsolute(projectPath)
+		? path.resolve(projectPath)
+		: path.resolve(REPO_ROOT, projectPath);
+	return resolved;
+};
 
 /** Creates a tool with a typed execution `context` */
 export const createTool = <TInput, TOutput>(

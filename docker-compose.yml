@@ -19,6 +19,8 @@ services:
             retries: 5
 
     nao:
+        env_file:
+            - .env
         build:
             context: .
             dockerfile: Dockerfile
@@ -52,8 +54,8 @@ services:
             # PostgreSQL SSL (use SSL without client certificates)
             # =================================================================
             PGSSLMODE: require
-            PGSSLCERT: ""
-            PGSSLKEY: ""
+            PGSSLCERT: ''
+            PGSSLKEY: ''
 
             # =================================================================
             # Context Configuration
@@ -71,6 +73,11 @@ services:
 
             # Optional: Schedule periodic git pull (cron expression)
             # NAO_REFRESH_SCHEDULE: "0 * * * *"  # Every hour
+
+            # Project database (from nao_config.yaml)
+            AWS_RDS_ENDPOINT: ${AWS_RDS_ENDPOINT}
+            AWS_READONLY_DB_USERNAME: ${AWS_READONLY_DB_USERNAME}
+            AWS_READONLY_DB_PASSWORD: ${AWS_READONLY_DB_PASSWORD}
         volumes:
             - ${NAO_DEFAULT_PROJECT_PATH}:/app/example
         depends_on:
