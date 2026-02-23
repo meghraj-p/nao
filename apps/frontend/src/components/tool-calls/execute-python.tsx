@@ -61,11 +61,7 @@ export const ExecutePythonToolCall = React.memo(function ExecutePythonToolCall({
 		},
 	];
 
-	const codePreview = displayCode
-		? displayCode.length > 50
-			? `${displayCode.slice(0, 50)}...`
-			: displayCode
-		: '';
+	const codePreview = displayCode ? (displayCode.length > 50 ? `${displayCode.slice(0, 50)}...` : displayCode) : '';
 	const titleContent = isInputStreaming ? (
 		<span>{isSettled ? 'Ran Python' : 'Running Python'}…</span>
 	) : (

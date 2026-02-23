@@ -65,8 +65,7 @@ export const ExecuteSqlToolCall = React.memo(function ExecuteSqlToolCall({
 		<span>{isSettled ? 'Executed' : 'Executing'}…</span>
 	) : (
 		<span>
-			{isSettled ? 'Executed' : 'Executing'}{' '}
-			<span className='text-xs font-normal truncate'>{displaySql}</span>
+			{isSettled ? 'Executed' : 'Executing'} <span className='text-xs font-normal truncate'>{displaySql}</span>
 		</span>
 	);
 

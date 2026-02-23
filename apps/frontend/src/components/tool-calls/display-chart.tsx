@@ -35,10 +35,7 @@ import { labelize, filterByDateRange, DATE_RANGE_OPTIONS, toKey } from '@/lib/ch
 
 const Colors = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)', 'var(--chart-5)'];
 
-function getSeriesLabel(
-	s: displayChart.SeriesConfig,
-	columnLabels?: Record<string, string>,
-): string {
+function getSeriesLabel(s: displayChart.SeriesConfig, columnLabels?: Record<string, string>): string {
 	return columnLabels?.[s.data_key] ?? s.label ?? labelize(s.data_key);
 }
 

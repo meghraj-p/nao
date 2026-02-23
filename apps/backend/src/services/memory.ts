@@ -17,11 +17,7 @@ import { MEMORY_CATEGORIES } from '../utils/memory';
  */
 class MemoryService {
 	/** Safely gets active memories for a user to be injected into the system prompt. */
-	public async safeGetUserMemories(
-		userId: string,
-		projectId: string,
-		excludeChatId?: string,
-	): Promise<UserMemory[]> {
+	public async safeGetUserMemories(userId: string, projectId: string, excludeChatId?: string): Promise<UserMemory[]> {
 		try {
 			const enabled = await memoryQueries.getIsMemoryEnabledForUserAndProject(userId, projectId);
 			if (!enabled) {

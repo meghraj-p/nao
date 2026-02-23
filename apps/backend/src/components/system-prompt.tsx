@@ -68,8 +68,8 @@ export function SystemPrompt({ memories = [] }: { memories: UserMemory[] }) {
 					overlapping or blank charts.
 				</ListItem>
 				<ListItem>
-					When pivoted data uses generic column names (s1, s2...), pass column_labels in display_chart
-					mapping each data_key to its display name (e.g. from a separate query that returns scheme names).
+					When pivoted data uses generic column names (s1, s2...), pass column_labels in display_chart mapping
+					each data_key to its display name (e.g. from a separate query that returns scheme names).
 				</ListItem>
 			</List>
 
