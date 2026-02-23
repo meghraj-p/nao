@@ -1,11 +1,14 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { Streamdown } from 'streamdown';
 import { Code, Copy, Terminal } from 'lucide-react';
 import { ToolCallWrapper } from './tool-call-wrapper';
 import type { ToolCallComponentProps } from '.';
 import { isToolSettled } from '@/lib/ai';
+import { useDebounceValue } from '@/hooks/use-debounce-value';
 
 type ViewMode = 'output' | 'code';
+
+const DEBOUNCE_MS = 400;
 
 const formatOutput = (value: unknown): string => {
 	if (value === null) {
@@ -20,11 +23,21 @@ const formatOutput = (value: unknown): string => {
 	return `\`\`\`bash\n${String(value)}\n\`\`\``;
 };
 
-export const ExecutePythonToolCall = ({ toolPart }: ToolCallComponentProps<'execute_python'>) => {
+export const ExecutePythonToolCall = React.memo(function ExecutePythonToolCall({
+	toolPart,
+}: ToolCallComponentProps<'execute_python'>) {
 	const [viewMode, setViewMode] = useState<ViewMode>('output');
 	const input = toolPart.input;
 	const output = toolPart.output;
 	const isSettled = isToolSettled(toolPart);
+	const isInputStreaming = toolPart.state === 'input-streaming';
+
+	const code = input?.code ?? '';
+	const debouncedCode = useDebounceValue(code, {
+		delay: DEBOUNCE_MS,
+		skipDebounce: () => !isInputStreaming,
+	});
+	const displayCode = isInputStreaming ? debouncedCode : code;
 
 	const actions = [
 		{
@@ -48,25 +61,38 @@ export const ExecutePythonToolCall = ({ toolPart }: ToolCallComponentProps<'exec
 		},
 	];
 
-	const codePreview = input?.code ? (input.code.length > 50 ? `${input.code.slice(0, 50)}...` : input.code) : '';
+	const codePreview = displayCode
+		? displayCode.length > 50
+			? `${displayCode.slice(0, 50)}...`
+			: displayCode
+		: '';
+	const titleContent = isInputStreaming ? (
+		<span>{isSettled ? 'Ran Python' : 'Running Python'}…</span>
+	) : (
+		<span>
+			{isSettled ? 'Ran Python' : 'Running Python'}{' '}
+			<span className='text-xs font-normal truncate'>{codePreview.replace(/\n/g, ' ')}</span>
+		</span>
+	);
 
 	return (
 		<ToolCallWrapper
 			defaultExpanded={false}
 			overrideError={viewMode === 'code'}
-			title={
-				<span>
-					{isSettled ? 'Ran Python' : 'Running Python'}{' '}
-					<span className='text-xs font-normal truncate'>{codePreview.replace(/\n/g, ' ')}</span>
-				</span>
-			}
+			title={titleContent}
 			actions={isSettled ? actions : []}
 		>
-			{viewMode === 'code' && input?.code ? (
+			{viewMode === 'code' && displayCode ? (
 				<div className='overflow-auto max-h-80 hide-code-header'>
-					<Streamdown mode='static' controls={{ code: false }}>
-						{`\`\`\`python\n${input.code}\n\`\`\``}
-					</Streamdown>
+					{isInputStreaming ? (
+						<pre className='p-3 text-sm font-mono overflow-auto'>
+							<code>{displayCode}</code>
+						</pre>
+					) : (
+						<Streamdown mode='static' controls={{ code: false }}>
+							{`\`\`\`python\n${displayCode}\n\`\`\``}
+						</Streamdown>
+					)}
 				</div>
 			) : output ? (
 				<div className='overflow-auto max-h-80'>
@@ -84,4 +110,4 @@ export const ExecutePythonToolCall = ({ toolPart }: ToolCallComponentProps<'exec
 			)}
 		</ToolCallWrapper>
 	);
-};
+});

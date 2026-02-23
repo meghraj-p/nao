@@ -67,6 +67,10 @@ export function SystemPrompt({ memories = [] }: { memories: UserMemory[] }) {
 					separate columns for each series. Avoid long format (one row per series per x-value) as it produces
 					overlapping or blank charts.
 				</ListItem>
+				<ListItem>
+					When pivoted data uses generic column names (s1, s2...), pass column_labels in display_chart
+					mapping each data_key to its display name (e.g. from a separate query that returns scheme names).
+				</ListItem>
 			</List>
 
 			<Title level={2}>How nao Works</Title>

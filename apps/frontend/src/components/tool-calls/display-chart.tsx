@@ -35,18 +35,27 @@ import { labelize, filterByDateRange, DATE_RANGE_OPTIONS, toKey } from '@/lib/ch
 
 const Colors = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)', 'var(--chart-5)'];
 
+function getSeriesLabel(
+	s: displayChart.SeriesConfig,
+	columnLabels?: Record<string, string>,
+): string {
+	return columnLabels?.[s.data_key] ?? s.label ?? labelize(s.data_key);
+}
+
 function ScatterChartTooltipContent({
 	active,
 	payload,
 	labelKey,
 	xAxisKey,
 	series,
+	columnLabels,
 }: {
 	active?: boolean;
 	payload?: Array<{ payload?: Record<string, unknown>; dataKey?: string | number; value?: unknown }>;
 	labelKey: string;
 	xAxisKey: string;
 	series: displayChart.SeriesConfig[];
+	columnLabels?: Record<string, string>;
 }) {
 	const first = payload?.[0];
 	if (!active || !first?.payload) {
@@ -60,7 +69,7 @@ function ScatterChartTooltipContent({
 			<div className='grid gap-1'>
 				{series.map((s) => (
 					<div key={s.data_key} className='flex justify-between gap-4'>
-						<span className='text-muted-foreground'>{s.label || labelize(s.data_key)}</span>
+						<span className='text-muted-foreground'>{getSeriesLabel(s, columnLabels)}</span>
 						<span className='font-mono tabular-nums'>{String(row[s.data_key] ?? '')}</span>
 					</div>
 				))}
@@ -119,6 +128,7 @@ export const DisplayChartToolCall = ({ toolPart }: ToolCallComponentProps<'displ
 						series={config.series}
 						xAxisType={config.x_axis_type === 'number' ? 'number' : 'category'}
 						labelKey={config.chart_type === 'scatter' ? (config.label_key ?? config.x_axis_key) : undefined}
+						columnLabels={config.column_labels}
 					/>
 				</div>
 			) : null,
@@ -181,6 +191,7 @@ export interface ChartDisplayProps {
 	title?: string;
 	showGrid?: boolean;
 	labelKey?: string;
+	columnLabels?: Record<string, string>;
 }
 
 export const ChartDisplay = React.memo(function ChartDisplay({
@@ -193,6 +204,7 @@ export const ChartDisplay = React.memo(function ChartDisplay({
 	title,
 	showGrid = true,
 	labelKey,
+	columnLabels,
 }: ChartDisplayProps) {
 	const { visibleSeries, hiddenSeriesKeys, handleToggleSeriesVisibility } = useSeriesVisibility(series);
 
@@ -218,12 +230,12 @@ export const ChartDisplay = React.memo(function ChartDisplay({
 
 		return series.reduce((acc, s, idx) => {
 			acc[s.data_key] = {
-				label: s.label || labelize(s.data_key),
+				label: getSeriesLabel(s, columnLabels),
 				color: s.color || Colors[idx % Colors.length],
 			};
 			return acc;
 		}, {} as ChartConfig);
-	}, [series, xAxisKey, data, chartType]);
+	}, [series, xAxisKey, data, chartType, columnLabels]);
 
 	const renderChart = (opts: {
 		chart: CategoricalChartProps;
@@ -232,7 +244,7 @@ export const ChartDisplay = React.memo(function ChartDisplay({
 		if (chartType === 'bar' || chartType === 'stacked_bar' || chartType === 'line') {
 			const Chart = chartType === 'bar' || chartType === 'stacked_bar' ? BarChart : AreaChart;
 			const legendPayload = series.map((s, idx) => ({
-				value: s.label || labelize(s.data_key),
+				value: getSeriesLabel(s, columnLabels),
 				dataKey: s.data_key,
 				color: s.color || Colors[idx % Colors.length],
 				isHidden: hiddenSeriesKeys.has(s.data_key),
@@ -311,7 +323,7 @@ export const ChartDisplay = React.memo(function ChartDisplay({
 		if (chartType === 'scatter') {
 			const scatterLabelKey = labelKey ?? xAxisKey;
 			const legendPayload = series.map((s, idx) => ({
-				value: s.label || labelize(s.data_key),
+				value: getSeriesLabel(s, columnLabels),
 				dataKey: s.data_key,
 				color: s.color || Colors[idx % Colors.length],
 				isHidden: hiddenSeriesKeys.has(s.data_key),
@@ -339,6 +351,7 @@ export const ChartDisplay = React.memo(function ChartDisplay({
 								labelKey={scatterLabelKey}
 								xAxisKey={xAxisKey}
 								series={visibleSeries}
+								columnLabels={columnLabels}
 							/>
 						)}
 					/>
@@ -347,7 +360,7 @@ export const ChartDisplay = React.memo(function ChartDisplay({
 							key={s.data_key}
 							dataKey={s.data_key}
 							fill={`var(--color-${s.data_key})`}
-							name={s.label || labelize(s.data_key)}
+							name={getSeriesLabel(s, columnLabels)}
 							isAnimationActive={false}
 						>
 							<LabelList
@@ -368,7 +381,7 @@ export const ChartDisplay = React.memo(function ChartDisplay({
 
 		if (chartType === 'radar') {
 			const legendPayload = series.map((s, idx) => ({
-				value: s.label || labelize(s.data_key),
+				value: getSeriesLabel(s, columnLabels),
 				dataKey: s.data_key,
 				color: s.color || Colors[idx % Colors.length],
 				isHidden: hiddenSeriesKeys.has(s.data_key),
@@ -390,7 +403,7 @@ export const ChartDisplay = React.memo(function ChartDisplay({
 							stroke={`var(--color-${s.data_key})`}
 							fill={`var(--color-${s.data_key})`}
 							fillOpacity={0.5}
-							name={s.label || labelize(s.data_key)}
+							name={getSeriesLabel(s, columnLabels)}
 							isAnimationActive={false}
 						/>
 					))}

@@ -170,9 +170,11 @@ export const useSyncMessages = ({ agent }: { agent: AgentHelpers }) => {
 		skipDebounce: ([, isRunning]) => !isRunning,
 	})[0];
 
-	// Sync the agent's messages with the fetched ones
+	// Sync the agent's messages with the fetched ones.
+	// Skip when we just finished streaming: chat.data may still have debounced (stale) content,
+	// while agent.messages already has the final streamed content.
 	useEffect(() => {
-		if (chat.data?.messages && !agent.isRunning) {
+		if (chat.data?.messages && !agent.isRunning && !wasRunningRef.current) {
 			agent.setMessages(chat.data.messages);
 		}
 	}, [chat.data?.messages, agent.isRunning, agent.setMessages]); // eslint-disable-line

@@ -17,8 +17,16 @@ import { MEMORY_CATEGORIES } from '../utils/memory';
  */
 class MemoryService {
 	/** Safely gets active memories for a user to be injected into the system prompt. */
-	public async safeGetUserMemories(userId: string, excludeChatId?: string): Promise<UserMemory[]> {
+	public async safeGetUserMemories(
+		userId: string,
+		projectId: string,
+		excludeChatId?: string,
+	): Promise<UserMemory[]> {
 		try {
+			const enabled = await memoryQueries.getIsMemoryEnabledForUserAndProject(userId, projectId);
+			if (!enabled) {
+				return [];
+			}
 			const memories = await memoryQueries.getUserMemories(userId, excludeChatId);
 			return memories.map((memory) => ({
 				category: memory.category,
@@ -28,6 +36,11 @@ class MemoryService {
 			console.error('[memory] injection failed:', err);
 			return [];
 		}
+	}
+
+	/** Normalizes memory content for storage (trim, collapse whitespace, ensure sentence ending). */
+	public normalizeMemoryContent(content: string): string {
+		return this._normalizeMemoryContent(content);
 	}
 
 	/** Safely schedules memory extraction for a user message. */

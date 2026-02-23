@@ -256,7 +256,7 @@ class NaoConfig(BaseModel):
         """
         if path is None:
             default_path = os.environ.get("NAO_DEFAULT_PROJECT_PATH")
-            path = Path(default_path) if default_path else Path.cwd()
+            path = Path(default_path).resolve() if default_path else Path.cwd()
 
         config_file = path / "nao_config.yaml"
 
@@ -269,7 +269,7 @@ class NaoConfig(BaseModel):
                 sys.exit(1)
 
         if not config_file.exists():
-            handle_error("No nao_config.yaml found in current directory")
+            handle_error(f"No nao_config.yaml found at {config_file}")
             return None
 
         try:

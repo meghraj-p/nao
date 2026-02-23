@@ -32,6 +32,12 @@ export const InputSchema = z.object({
 		.describe(
 			'A concise and descriptive title of what the chart shows. Do not include the type of chart in the title or other chart configurations.',
 		),
+	column_labels: z
+		.record(z.string(), z.string())
+		.optional()
+		.describe(
+			'Optional mapping of data_key to display label. Use when pivoted columns have generic names (s1, s2) but you know the actual entity names from a previous query.',
+		),
 });
 
 export const OutputSchema = z.object({
