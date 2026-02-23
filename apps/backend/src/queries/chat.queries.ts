@@ -1,4 +1,4 @@
-import { and, desc, eq, like, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, like, sql } from 'drizzle-orm';
 
 import s, { DBChat, DBChatMessage, DBMessagePart, MessageFeedback, NewChat } from '../db/abstractSchema';
 import { db } from '../db/db';
@@ -46,6 +46,7 @@ export const loadChat = async (
 		.innerJoin(s.chatMessage, eq(s.chatMessage.chatId, s.chat.id))
 		.where(eq(s.chatMessage.chatId, chatId))
 		.innerJoin(s.messagePart, eq(s.messagePart.messageId, s.chatMessage.id))
+		.orderBy(asc(s.chatMessage.createdAt), asc(s.messagePart.order))
 		.$dynamic();
 
 	const result = opts.includeFeedback

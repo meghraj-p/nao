@@ -3,7 +3,6 @@ import { useMutation } from '@tanstack/react-query';
 import { useMemo, useEffect, useRef, useCallback } from 'react';
 import { Chat as Agent, useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
-import { useDebounceValue } from './use-debounce-value';
 import { useCurrent } from './useCurrent';
 import { useMemoObject } from './useMemoObject';
 import { usePrevRef } from './use-prev';
@@ -149,45 +148,25 @@ export const useAgent = (): AgentHelpers => {
 	});
 };
 
-const SYNC_DEBOUNCE_MS = 500;
-
 /** Sync the messages between the useChat hook and the query client. */
 export const useSyncMessages = ({ agent }: { agent: AgentHelpers }) => {
 	const { chatId } = useParams({ strict: false });
 	const chat = useChatQuery({ chatId });
 	const setChat = useSetChat();
-	const wasRunningRef = useRef(false);
-	if (agent.isRunning) {
-		wasRunningRef.current = true;
-	}
 
-	const messagesWithRunning = useMemo(
-		() => [agent.messages, agent.isRunning] as const,
-		[agent.messages, agent.isRunning],
-	);
-	const debouncedMessages = useDebounceValue(messagesWithRunning, {
-		delay: SYNC_DEBOUNCE_MS,
-		skipDebounce: ([, isRunning]) => !isRunning,
-	})[0];
-
-	// Sync the agent's messages with the fetched ones.
-	// Skip when we just finished streaming: chat.data may still have debounced (stale) content,
-	// while agent.messages already has the final streamed content.
+	// Load from server: when we have chat data and agent is not running, sync agent from server.
 	useEffect(() => {
-		if (chat.data?.messages && !agent.isRunning && !wasRunningRef.current) {
+		if (chat.data?.messages && !agent.isRunning) {
 			agent.setMessages(chat.data.messages);
 		}
 	}, [chat.data?.messages, agent.isRunning, agent.setMessages]); // eslint-disable-line
 
-	// Sync the fetched messages with the agent's (debounced during streaming)
+	// Save to cache: write agent.messages when streaming, or when we have messages (e.g. after stream completes).
 	useEffect(() => {
-		if (chatId && (agent.isRunning || wasRunningRef.current)) {
-			setChat({ chatId }, (prev) => (!prev ? prev : { ...prev, messages: debouncedMessages }));
-			if (!agent.isRunning) {
-				wasRunningRef.current = false;
-			}
+		if (chatId && (agent.isRunning || agent.messages.length > 0)) {
+			setChat({ chatId }, (prev) => (!prev ? prev : { ...prev, messages: agent.messages }));
 		}
-	}, [setChat, debouncedMessages, chatId, agent.isRunning]);
+	}, [setChat, agent.messages, chatId, agent.isRunning]);
 };
 
 /** Dispose inactive agents to free up memory */
