@@ -11,14 +11,13 @@ import {
 	ToolLoopAgentSettings,
 } from 'ai';
 
-import { CACHE_1H, CACHE_5M, createProviderModel } from '../agents/providers';
+import { CACHE_1H, CACHE_5M } from '../agents/providers';
 import { getTools } from '../agents/tools';
 import { SystemPrompt } from '../components/system-prompt';
 import { renderToMarkdown } from '../lib/markdown';
 import * as chatQueries from '../queries/chat.queries';
 import * as projectQueries from '../queries/project.queries';
 import * as llmConfigQueries from '../queries/project-llm-config.queries';
-import { AgentSettings } from '../types/agent-settings';
 import { Mention, TokenCost, TokenUsage, UIChat, UIMessage } from '../types/chat';
 import { ToolContext } from '../types/tools';
 import {
@@ -28,12 +27,13 @@ import {
 	getLastUserMessageText,
 	retrieveProjectById,
 } from '../utils/ai';
-import { getDefaultModelId, getEnvApiKey, getEnvModelSelections, ModelSelection } from '../utils/llm';
+import { getDefaultModelId, getEnvModelSelections, ModelSelection, resolveProviderModel } from '../utils/llm';
 import { resolveProjectFolder } from '../utils/tools';
 import { memoryService } from './memory';
 import { skillService } from './skill.service';
 
 export type { ModelSelection };
+type AgentTools = Awaited<ReturnType<typeof getTools>>;
 
 export interface AgentRunResult {
 	text: string;
@@ -69,14 +69,14 @@ export class AgentService {
 		const modelConfig = await this._getModelConfig(chat.projectId, resolvedModelSelection);
 		const agentSettings = await projectQueries.getAgentSettings(chat.projectId);
 		const toolContext = await this._getToolContext(chat.projectId);
-
+		const agentTools = getTools(agentSettings);
 		const agent = new AgentManager(
 			chat,
 			modelConfig,
 			resolvedModelSelection,
 			() => this._agents.delete(chat.id),
 			abortController,
-			agentSettings,
+			agentTools,
 			toolContext,
 		);
 		this._agents.set(chat.id, agent);
@@ -137,31 +137,16 @@ export class AgentService {
 		projectId: string,
 		modelSelection: ModelSelection,
 	): Promise<Pick<ToolLoopAgentSettings, 'model' | 'providerOptions'>> {
-		const config = await llmConfigQueries.getProjectLlmConfigByProvider(projectId, modelSelection.provider);
-
-		if (config) {
-			return createProviderModel(
-				modelSelection.provider,
-				{
-					apiKey: config.apiKey,
-					...(config.baseUrl && { baseURL: config.baseUrl }),
-				},
-				modelSelection.modelId,
-			);
+		const result = await resolveProviderModel(projectId, modelSelection.provider, modelSelection.modelId);
+		if (!result) {
+			throw Error('No model config found');
 		}
-
-		// No config but env var might exist - use it
-		const envApiKey = getEnvApiKey(modelSelection.provider);
-		if (envApiKey) {
-			return createProviderModel(modelSelection.provider, { apiKey: envApiKey }, modelSelection.modelId);
-		}
-
-		throw Error('No model config found');
+		return result;
 	}
 }
 
 class AgentManager {
-	private readonly _agent: ToolLoopAgent<never, ReturnType<typeof getTools>, never>;
+	private readonly _agent: ToolLoopAgent<never, AgentTools, never>;
 
 	constructor(
 		readonly chat: AgentChat,
@@ -169,12 +154,12 @@ class AgentManager {
 		private readonly _modelSelection: ModelSelection,
 		private readonly _onDispose: () => void,
 		private readonly _abortController: AbortController,
-		private readonly _agentSettings: AgentSettings | null,
+		private readonly _agentTools: AgentTools,
 		private readonly _toolContext: ToolContext,
 	) {
 		this._agent = new ToolLoopAgent({
 			...this._modelConfig,
-			tools: getTools(this._agentSettings),
+			tools: this._agentTools,
 			maxOutputTokens: 16_000,
 			prepareStep: ({ messages }) => ({
 				messages: this._addCache(this._pruneMessages(messages)),
@@ -192,7 +177,7 @@ class AgentManager {
 		},
 	): ReadableStream<InferUIMessageChunk<UIMessage>> {
 		let error: unknown = undefined;
-		let result: StreamTextResult<ReturnType<typeof getTools>, never>;
+		let result: StreamTextResult<AgentTools, never> | undefined;
 
 		return createUIMessageStream<UIMessage>({
 			generateId: () => crypto.randomUUID(),
@@ -226,18 +211,20 @@ class AgentManager {
 				return String(err);
 			},
 			onFinish: async (e) => {
-				const stopReason = e.isAborted ? 'interrupted' : e.finishReason;
-				const tokenUsage = await this._getTotalUsage(result);
-				await chatQueries.upsertMessage(e.responseMessage, {
-					chatId: this.chat.id,
-					stopReason,
-					error,
-					tokenUsage,
-					llmProvider: this._modelSelection.provider,
-					llmModelId: this._modelSelection.modelId,
-				});
-
-				this._onDispose();
+				try {
+					const stopReason = e.isAborted ? 'interrupted' : e.finishReason;
+					const tokenUsage = await this._getTotalUsage(result);
+					await chatQueries.upsertMessage(e.responseMessage, {
+						chatId: this.chat.id,
+						stopReason,
+						error,
+						tokenUsage,
+						llmProvider: this._modelSelection.provider,
+						llmModelId: this._modelSelection.modelId,
+					});
+				} finally {
+					this._onDispose();
+				}
 			},
 		});
 	}
@@ -249,7 +236,7 @@ class AgentManager {
 		uiMessages = this._addSkills(uiMessages, mentions);
 		uiMessages = this._fillEmptyAssistantTurns(uiMessages, '[NO CONTENT]');
 		const modelMessages = await convertToModelMessages(uiMessages);
-		const memories = await memoryService.safeGetUserMemories(this.chat.userId, this.chat.id);
+		const memories = await memoryService.safeGetUserMemories(this.chat.userId, this.chat.projectId, this.chat.id);
 		const systemPrompt = renderToMarkdown(SystemPrompt({ memories }));
 		const systemMessage: ModelMessage = { role: 'system', content: systemPrompt };
 		modelMessages.unshift(systemMessage);
@@ -270,8 +257,12 @@ class AgentManager {
 	}
 
 	private async _getTotalUsage(
-		result: StreamTextResult<ReturnType<typeof getTools>, never>,
+		result: StreamTextResult<ReturnType<typeof getTools>, never> | undefined,
 	): Promise<TokenUsage | undefined> {
+		if (!result) {
+			return undefined;
+		}
+
 		try {
 			// totalUsage promise will throw if an error occured during the streaming
 			return convertToTokenUsage(await result.totalUsage);

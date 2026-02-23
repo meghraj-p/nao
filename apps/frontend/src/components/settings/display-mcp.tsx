@@ -1,18 +1,27 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 import { useState } from 'react';
+import { SettingsCard } from '../ui/settings-card';
 import { trpc } from '@/main';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 
-interface McpListProps {
+interface Props {
 	isAdmin: boolean;
 }
 
-export function McpList({ isAdmin }: McpListProps) {
+const estimateToolTokens = (tool: { name: string; description?: string; input_schema: unknown }) => {
+	const serialized = JSON.stringify({
+		name: tool.name,
+		description: tool.description ?? '',
+		schema: tool.input_schema ?? {},
+	});
+	return Math.ceil(serialized.length / 4);
+};
+
+export function McpSettings({ isAdmin }: Props) {
 	const mcpState = useQuery({
 		...trpc.mcp.getState.queryOptions(),
 		refetchOnMount: 'always',
@@ -29,8 +38,28 @@ export function McpList({ isAdmin }: McpListProps) {
 		}),
 	);
 
+	const toggleToolMutation = useMutation(
+		trpc.mcp.toggleTool.mutationOptions({
+			onSuccess: (data, _, __, ctx) => {
+				ctx.client.setQueryData(trpc.mcp.getState.queryKey(), () => data);
+			},
+		}),
+	);
+
+	const setAllServerToolsMutation = useMutation(
+		trpc.mcp.setAllServerTools.mutationOptions({
+			onSuccess: (data, _, __, ctx) => {
+				ctx.client.setQueryData(trpc.mcp.getState.queryKey(), () => data);
+			},
+		}),
+	);
+
 	const handleReconnect = async () => {
 		await reconnectMutation.mutateAsync();
+	};
+
+	const handleToggleTool = (toolName: string, enabled: boolean) => {
+		toggleToolMutation.mutate({ toolName, enabled });
 	};
 
 	const handleExpand = (serverName: string) => {
@@ -43,29 +72,30 @@ export function McpList({ isAdmin }: McpListProps) {
 		});
 	};
 
+	const handleSetAllServerTools = (serverName: string, enabled: boolean) => {
+		setAllServerToolsMutation.mutate({ serverName, enabled });
+	};
+
 	const mcpEntries = mcpState.data ? Object.entries(mcpState.data) : [];
 
 	return (
-		<div className='grid gap-4'>
-			<div className='flex items-center justify-between'>
-				{isAdmin && (
+		<SettingsCard
+			title='MCP Servers'
+			description='Integrate MCP servers to extend the capabilities of nao.'
+			action={
+				isAdmin && (
 					<Button
 						onClick={handleReconnect}
 						disabled={reconnectMutation.isPending}
+						isLoading={reconnectMutation.isPending}
 						variant='secondary'
 						size='sm'
 					>
-						{reconnectMutation.isPending ? (
-							<>
-								<Spinner />
-								{mcpEntries.length === 0 ? 'Connecting...' : 'Reconnecting...'}
-							</>
-						) : (
-							<>{mcpEntries.length === 0 ? 'Connect' : 'Reconnect'}</>
-						)}
+						{mcpEntries.length === 0 ? 'Connect' : 'Reconnect'}
 					</Button>
-				)}
-			</div>
+				)
+			}
+		>
 			{mcpState.isLoading ? (
 				<div className='text-sm text-muted-foreground'>Loading MCP servers...</div>
 			) : mcpEntries.length === 0 ? (
@@ -92,6 +122,8 @@ export function McpList({ isAdmin }: McpListProps) {
 							{mcpEntries.map(([name, state]) => {
 								const isConnected = !state.error;
 								const isExpanded = expandedServers.includes(name);
+								const enabledCount = state.tools.filter((t) => t.enabled).length;
+								const totalCount = state.tools.length;
 
 								return (
 									<>
@@ -130,12 +162,65 @@ export function McpList({ isAdmin }: McpListProps) {
 															</div>
 														) : (
 															<>
+																<div className='flex items-center justify-between mb-2'>
+																	<div className=' flex gap-4 text-sm font-medium'>
+																		<div>
+																			{enabledCount} / {totalCount} tools active
+																		</div>
+																		<div>
+																			~
+																			{state.tools
+																				.filter((t) => t.enabled)
+																				.reduce(
+																					(sum, t) =>
+																						sum + estimateToolTokens(t),
+																					0,
+																				)}{' '}
+																			tokens
+																		</div>
+																	</div>
+																	{isAdmin && (
+																		<Button
+																			variant='ghost'
+																			size='sm'
+																			onClick={() =>
+																				handleSetAllServerTools(
+																					name,
+																					enabledCount === 0,
+																				)
+																			}
+																			disabled={
+																				setAllServerToolsMutation.isPending
+																			}
+																		>
+																			{enabledCount > 0
+																				? 'Disable all'
+																				: 'Enable all'}
+																		</Button>
+																	)}
+																</div>
 																<div className='text-sm font-medium mb-2'>
 																	Tools ({state.tools.length})
 																</div>
 																<div className='flex flex-wrap gap-2'>
 																	{state.tools.map((tool) => (
-																		<Badge key={tool.name} variant='outline'>
+																		<Badge
+																			key={tool.name}
+																			variant='outline'
+																			onClick={() =>
+																				isAdmin &&
+																				handleToggleTool(
+																					tool.name,
+																					!tool.enabled,
+																				)
+																			}
+																			className={cn(
+																				isAdmin && 'cursor-pointer select-none',
+																				!tool.enabled
+																					? 'border-border text-muted-foreground line-through'
+																					: '',
+																			)}
+																		>
 																			{tool.name}
 																		</Badge>
 																	))}
@@ -153,6 +238,6 @@ export function McpList({ isAdmin }: McpListProps) {
 					</Table>
 				</div>
 			)}
-		</div>
+		</SettingsCard>
 	);
 }

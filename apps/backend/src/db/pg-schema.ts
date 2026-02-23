@@ -27,6 +27,7 @@ export const user = pgTable('user', {
 	emailVerified: boolean('email_verified').default(false).notNull(),
 	image: text('image'),
 	requiresPasswordReset: boolean('requires_password_reset').default(false).notNull(),
+	memoryEnabled: boolean('memory_enabled').default(true).notNull(),
 	createdAt: timestamp('created_at').defaultNow().notNull(),
 	updatedAt: timestamp('updated_at')
 		.defaultNow()
@@ -138,6 +139,8 @@ export const project = pgTable(
 		slackBotToken: text('slack_bot_token'),
 		slackSigningSecret: text('slack_signing_secret'),
 		agentSettings: jsonb('agent_settings').$type<AgentSettings>(),
+		enabledMcpTools: jsonb('enabled_tools').$type<string[]>().notNull().default([]),
+		knownMcpServers: jsonb('known_mcp_servers').$type<string[]>().notNull().default([]),
 		createdAt: timestamp('created_at').defaultNow().notNull(),
 		updatedAt: timestamp('updated_at')
 			.defaultNow()
