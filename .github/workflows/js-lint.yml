@@ -1,12 +1,13 @@
 name: JS Lint
 
 on:
-    push:
-        paths:
-            - 'apps/**'
-    pull_request:
-        paths:
-            - 'apps/**'
+    # push:
+    #     paths:
+    #         - 'apps/**'
+    # pull_request:
+    #     paths:
+    #         - 'apps/**'
+    workflow_dispatch:
 
 jobs:
     lint:

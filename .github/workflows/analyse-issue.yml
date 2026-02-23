@@ -1,8 +1,9 @@
 name: Analyze Issue with Ollama
 
 on:
-    issues:
-        types: [opened]
+    # issues:
+    #     types: [opened]
+    workflow_dispatch:
 
 jobs:
     analyze:

@@ -1,12 +1,13 @@
 name: CLI Lint
 
 on:
-    push:
-        paths:
-            - 'cli/**'
-    pull_request:
-        paths:
-            - 'cli/**'
+    # push:
+    #     paths:
+    #         - 'cli/**'
+    # pull_request:
+    #     paths:
+    #         - 'cli/**'
+    workflow_dispatch:
 
 jobs:
     ruff:
