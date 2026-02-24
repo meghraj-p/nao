@@ -39,7 +39,7 @@ export async function executeQuery(
 
 export default createTool<executeSql.Input, executeSql.Output>({
 	description:
-		'Execute a SQL query against the connected database and return the results. If multiple databases are configured, specify the database_id.',
+		'Execute a SQL query against the connected database and return the results. If multiple databases are configured, specify the database_id. Output includes: id (query_xxx, use in display_chart query_id), data (array of rows as key-value objects), columns (column names), row_count.',
 	inputSchema: schemas.InputSchema,
 	outputSchema: schemas.OutputSchema,
 	execute: executeQuery,

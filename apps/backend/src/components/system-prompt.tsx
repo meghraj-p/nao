@@ -71,7 +71,34 @@ export function SystemPrompt({ memories = [] }: { memories: UserMemory[] }) {
 					When pivoted data uses generic column names (s1, s2...), pass column_labels in display_chart mapping
 					each data_key to its display name (e.g. from a separate query that returns scheme names).
 				</ListItem>
-			</List>
+				<ListItem>
+					For display_chart x_axis_type: use "date" only when x-axis values are parseable by JavaScript Date
+					(e.g. YYYY-MM-DD). Use "category" for quarter labels (quarter_ending), fiscal periods (FY25-Q1), or
+					any non-ISO-date strings.
+				</ListItem>
+				<ListItem>
+					Chart types: bar, stacked_bar, line, filled_area for trends; pie, funnel, funnelarea for
+					composition; scatter, bubble (add size_key for 3rd dimension) for correlations; horizontal_bar for
+					long labels; table for tabular display; candlestick, ohlc (use ohlc_keys) for OHLC data; waterfall
+					for cumulative changes (use measure_key); indicator, gauge for single-value KPIs.
+				</ListItem>
+				<ListItem>
+					SQL column requirements per chart: bar/line/area — x-axis column + one numeric column per series
+					(wide format); pie/funnel — category column + value column; scatter — x + y columns; bubble — x, y,
+					size columns; candlestick/ohlc — date + open, high, low, close columns; waterfall — category +
+					value + optional measure column (relative/total/absolute); indicator/gauge — one row with value
+					column.
+				</ListItem>
+				<ListItem>
+					For subplots: use charts array (each with chart_type, x_axis_key, series, optional title).
+					Optionally set grid.rows and grid.columns. All charts use the same query_id.
+				</ListItem>
+				<ListItem>
+					For combined charts (e.g. bar + line): use layers array (each with chart_type, series). Use
+					y_axis: "y2" for a layer that needs a secondary y-axis (e.g. % on right). Shared x_axis_key at top
+					level.
+				</ListItem>
+			</List>	
 
 			<Title level={2}>How nao Works</Title>
 			<List>
