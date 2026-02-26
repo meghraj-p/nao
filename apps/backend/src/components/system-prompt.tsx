@@ -61,29 +61,36 @@ export function SystemPrompt({ memories = [] }: { memories: UserMemory[] }) {
 
 			<Title level={2}>Chart Rules (display_chart)</Title>
 			<Span>
-				The display_chart tool takes query_id (from execute_sql output) and python_code. The code
-				runs in a Python sandbox with these pre-imported: df (pandas DataFrame of SQL results), pd
-				(pandas), np (numpy), px (plotly.express), go (plotly.graph_objects), math, datetime, date,
-				statistics. The code must assign the final plotly Figure to a variable named `fig`. Do not
-				call fig.show() or fig.to_html(). Write a single code block with no comments.
+				The display_chart tool takes query_id (from execute_sql output) and python_code. The code runs in a
+				Python sandbox with these pre-imported: df (pandas DataFrame of SQL results), pd (pandas), np (numpy),
+				px (plotly.express), go (plotly.graph_objects), math, datetime, date, statistics. The code must assign
+				the final plotly Figure to a variable named `fig`. Do not call fig.show() or fig.to_html(). Write a
+				single code block with no comments.
 			</Span>
 			<List>
 				<ListItem>
 					If display_chart returns an error, fix the code and retry. Give up after 3 failed attempts.
 				</ListItem>
-				<ListItem>Use only pandas and plotly. Do not import os, sys, subprocess, shutil, glob, tempfile,
-					pickle, or any system modules. Do not use file operations, environment variables, or system
-					commands.</ListItem>
+				<ListItem>
+					Use only pandas and plotly. Do not import os, sys, subprocess, shutil, glob, tempfile, pickle, or
+					any system modules. Do not use file operations, environment variables, or system commands.
+				</ListItem>
 				<ListItem>
 					When working with stock prices, index values, or mutual fund NAVs, include ONLY dates where the
 					corresponding price/NAV exists.
 				</ListItem>
-				<ListItem>Always display title and axis labels.</ListItem>
+				<ListItem>Always display chart title and axis titles.</ListItem>
+				<ListItem>
+					For time-series or date-based x-axes, do not force all tick labels to display. Let Plotly
+					auto-manage tick density, or use nticks to limit to a reasonable number (e.g., 8–12). Never set
+					tickmode='array' with all data points on a dense x-axis.
+				</ListItem>
 				<ListItem>
 					Set x and y axis line width to 0.2, grid width to 1. Gridlines should be thin and light grey.
 				</ListItem>
 				<ListItem>
-					If there are markers, use textposition='top center'. Do not show markers in line charts.
+					If there are markers, use textposition='top center'. Do not show markers in line charts unless there
+					is a requirement to highlight certain datapoints.
 				</ListItem>
 				<ListItem>
 					Hover number formatting: if value {'<'} 1000, show 2 decimal places; if {'≥'} 1000, no decimals.
@@ -91,9 +98,8 @@ export function SystemPrompt({ memories = [] }: { memories: UserMemory[] }) {
 					Hovertemplate must include both x and y values and the category name.
 				</ListItem>
 				<ListItem>
-					For candlestick charts: use hovertext and hoverinfo, NOT hovertemplate. Do not use textposition
-					on candlestick traces (use a separate go.Scatter with mode='text' or layout.annotations for
-					labels).
+					For candlestick charts: use hovertext and hoverinfo, NOT hovertemplate. Do not use textposition on
+					candlestick traces (use a separate go.Scatter with mode='text' or layout.annotations for labels).
 				</ListItem>
 				<ListItem>
 					Always use data=[...] keyword argument in go.Figure(). Never pass a bare list directly.

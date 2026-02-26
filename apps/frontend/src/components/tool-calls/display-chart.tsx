@@ -75,7 +75,7 @@ function PlotlyIframe({ html }: { html: string }) {
 </head><body>${html}</body></html>`;
 
 	return (
-		<div className='my-4 w-full'>
+		<div className='my-4 w-full border border-border'>
 			<iframe
 				ref={iframeRef}
 				srcDoc={wrappedHtml}

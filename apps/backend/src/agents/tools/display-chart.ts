@@ -33,11 +33,17 @@ export default tool<displayChart.Input, displayChart.Output>({
 	execute: async ({ query_id, python_code }) => {
 		const cached = getQueryResult(query_id);
 		if (!cached) {
-			return { success: false, error: `No cached data found for query_id "${query_id}". The data may have expired or the server restarted.` };
+			return {
+				success: false,
+				error: `No cached data found for query_id "${query_id}". The data may have expired or the server restarted.`,
+			};
 		}
 
 		if (cached.data.length > MAX_CHART_ROWS) {
-			return { success: false, error: `Dataset has ${cached.data.length} rows which exceeds the ${MAX_CHART_ROWS} row limit for chart rendering. Use a SQL query with aggregation or LIMIT to reduce the data size.` };
+			return {
+				success: false,
+				error: `Dataset has ${cached.data.length} rows which exceeds the ${MAX_CHART_ROWS} row limit for chart rendering. Use a SQL query with aggregation or LIMIT to reduce the data size.`,
+			};
 		}
 
 		const result = await executeChartPython(python_code, cached.data);
