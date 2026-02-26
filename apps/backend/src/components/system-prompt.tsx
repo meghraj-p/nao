@@ -57,48 +57,55 @@ export function SystemPrompt({ memories = [] }: { memories: UserMemory[] }) {
 					researching.
 				</ListItem>
 				<ListItem>If you can execute a SQL query, use the execute_sql tool for it.</ListItem>
+			</List>
+
+			<Title level={2}>Chart Rules (display_chart)</Title>
+			<Span>
+				The display_chart tool takes query_id (from execute_sql output) and python_code. The code
+				runs in a Python sandbox with these pre-imported: df (pandas DataFrame of SQL results), pd
+				(pandas), np (numpy), px (plotly.express), go (plotly.graph_objects), math, datetime, date,
+				statistics. The code must assign the final plotly Figure to a variable named `fig`. Do not
+				call fig.show() or fig.to_html(). Write a single code block with no comments.
+			</Span>
+			<List>
 				<ListItem>
-					When using display_chart, use the query_id from the execute_sql output that contains the data you
-					want to chart. The query_id appears as "Query ID: query_xxx" in the output. Copy it exactly and
-					verify it matches the data before charting.
+					If display_chart returns an error, fix the code and retry. Give up after 3 failed attempts.
+				</ListItem>
+				<ListItem>Use only pandas and plotly. Do not import os, sys, subprocess, shutil, glob, tempfile,
+					pickle, or any system modules. Do not use file operations, environment variables, or system
+					commands.</ListItem>
+				<ListItem>
+					When working with stock prices, index values, or mutual fund NAVs, include ONLY dates where the
+					corresponding price/NAV exists.
+				</ListItem>
+				<ListItem>Always display title and axis labels.</ListItem>
+				<ListItem>
+					Set x and y axis line width to 0.2, grid width to 1. Gridlines should be thin and light grey.
 				</ListItem>
 				<ListItem>
-					For line and area charts, return data in wide format: one row per x-axis value (e.g. date) with
-					separate columns for each series. Avoid long format (one row per series per x-value) as it produces
-					overlapping or blank charts.
+					If there are markers, use textposition='top center'. Do not show markers in line charts.
 				</ListItem>
 				<ListItem>
-					When pivoted data uses generic column names (s1, s2...), pass column_labels in display_chart mapping
-					each data_key to its display name (e.g. from a separate query that returns scheme names).
+					Hover number formatting: if value {'<'} 1000, show 2 decimal places; if {'≥'} 1000, no decimals.
+					Numbers use Indian formatting: comma after first 3 digits from right, then every 2 digits.
+					Hovertemplate must include both x and y values and the category name.
 				</ListItem>
 				<ListItem>
-					For display_chart x_axis_type: use "date" only when x-axis values are parseable by JavaScript Date
-					(e.g. YYYY-MM-DD). Use "category" for quarter labels (quarter_ending), fiscal periods (FY25-Q1), or
-					any non-ISO-date strings.
+					For candlestick charts: use hovertext and hoverinfo, NOT hovertemplate. Do not use textposition
+					on candlestick traces (use a separate go.Scatter with mode='text' or layout.annotations for
+					labels).
 				</ListItem>
 				<ListItem>
-					Chart types: bar, stacked_bar, line, filled_area for trends; pie, funnel, funnelarea for
-					composition; scatter, bubble (add size_key for 3rd dimension) for correlations; horizontal_bar for
-					long labels; table for tabular display; candlestick, ohlc (use ohlc_keys) for OHLC data; waterfall
-					for cumulative changes (use measure_key); indicator, gauge for single-value KPIs.
+					Always use data=[...] keyword argument in go.Figure(). Never pass a bare list directly.
 				</ListItem>
 				<ListItem>
-					SQL column requirements per chart: bar/line/area — x-axis column + one numeric column per series
-					(wide format); pie/funnel — category column + value column; scatter — x + y columns; bubble — x, y,
-					size columns; candlestick/ohlc — date + open, high, low, close columns; waterfall — category +
-					value + optional measure column (relative/total/absolute); indicator/gauge — one row with value
-					column.
+					Background and axes color: #FFF. Enhance readability with low opacity (0.4-0.7) where appropriate.
 				</ListItem>
 				<ListItem>
-					For subplots: use charts array (each with chart_type, x_axis_key, series, optional title).
-					Optionally set grid.rows and grid.columns. All charts use the same query_id.
+					Color palette: #6929c4, #1192e8, #007d79, #5367ff, #6fdc8c, #002d9c, #012749, #d12771, #08bdba,
+					#f56905, #44475b (use tints and shades as needed).
 				</ListItem>
-				<ListItem>
-					For combined charts (e.g. bar + line): use layers array (each with chart_type, series). Use
-					y_axis: "y2" for a layer that needs a secondary y-axis (e.g. % on right). Shared x_axis_key at top
-					level.
-				</ListItem>
-			</List>	
+			</List>
 
 			<Title level={2}>How nao Works</Title>
 			<List>

@@ -6,6 +6,42 @@ import { env } from '../../env';
 import { ToolContext } from '../../types/tools';
 import { createTool } from '../../utils/tools';
 
+const MAX_CACHED_QUERIES = 50;
+const CACHE_TTL_MS = 15 * 60 * 1000;
+
+type CachedQuery = { data: Record<string, unknown>[]; columns: string[]; cachedAt: number };
+const queryResultCache = new Map<string, CachedQuery>();
+
+export function getQueryResult(queryId: string): { data: Record<string, unknown>[]; columns: string[] } | undefined {
+	const entry = queryResultCache.get(queryId);
+	if (!entry) {
+		return undefined;
+	}
+	if (Date.now() - entry.cachedAt > CACHE_TTL_MS) {
+		queryResultCache.delete(queryId);
+		return undefined;
+	}
+	return entry;
+}
+
+function cacheQueryResult(queryId: string, data: Record<string, unknown>[], columns: string[]): void {
+	evictExpiredEntries();
+	if (queryResultCache.size >= MAX_CACHED_QUERIES) {
+		const oldest = queryResultCache.keys().next().value!;
+		queryResultCache.delete(oldest);
+	}
+	queryResultCache.set(queryId, { data, columns, cachedAt: Date.now() });
+}
+
+function evictExpiredEntries(): void {
+	const now = Date.now();
+	for (const [key, entry] of queryResultCache) {
+		if (now - entry.cachedAt > CACHE_TTL_MS) {
+			queryResultCache.delete(key);
+		}
+	}
+}
+
 export async function executeQuery(
 	{ sql_query, database_id }: executeSql.Input,
 	context: ToolContext,
@@ -29,11 +65,14 @@ export async function executeQuery(
 		throw new Error(`Error executing SQL query: ${JSON.stringify(errorData.detail)}`);
 	}
 
-	const data = await response.json();
+	const result = await response.json();
+	const queryId = `query_${crypto.randomUUID().slice(0, 8)}`;
+	cacheQueryResult(queryId, result.data, result.columns);
+
 	return {
 		_version: '1',
-		...data,
-		id: `query_${crypto.randomUUID().slice(0, 8)}`,
+		...result,
+		id: queryId,
 	};
 }
 

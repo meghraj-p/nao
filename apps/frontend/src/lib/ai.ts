@@ -69,6 +69,7 @@ export const checkIsAgentRunning = (agent: Pick<UseChatHelpers<UIMessage>, 'stat
 /** Tools that should NOT be collapsed (important UI elements) */
 export const NON_COLLAPSIBLE_TOOLS: StaticToolName[] = [
 	'execute_sql',
+	'execute_python',
 	'display_chart',
 	'suggest_follow_ups',
 	'execute_python',

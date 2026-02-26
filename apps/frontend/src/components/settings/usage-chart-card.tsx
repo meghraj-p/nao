@@ -1,5 +1,5 @@
+import { UsageBarChart } from './usage-bar-chart';
 import type { UsageRecord } from '@nao/backend/usage';
-import { ChartDisplay } from '@/components/tool-calls/display-chart';
 import { SettingsCard } from '@/components/ui/settings-card';
 
 export interface UsageChartCardProps {
@@ -43,13 +43,12 @@ export function UsageChartCard({
 				</div>
 			) : (
 				<div className={isFetching ? 'opacity-50' : ''}>
-					<ChartDisplay
+					<UsageBarChart
 						data={data as unknown as Record<string, unknown>[]}
 						chartType={chartType}
 						xAxisKey='date'
-						xAxisType='category'
-						xAxisLabelFormatter={xAxisLabelFormatter}
 						series={series}
+						xAxisLabelFormatter={xAxisLabelFormatter}
 						showGrid={true}
 					/>
 				</div>

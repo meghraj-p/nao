@@ -1,6 +1,11 @@
+import asyncio
 import math
 import os
+import re
+import statistics
 import sys
+import traceback
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import date, datetime
 from decimal import Decimal
@@ -8,6 +13,8 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -109,11 +116,57 @@ class RefreshResponse(BaseModel):
     message: str
 
 
+class ExecuteChartPythonRequest(BaseModel):
+    python_code: str
+    data: list[dict]
+
+
+class ExecuteChartPythonResponse(BaseModel):
+    html: str
+
+
 class HealthResponse(BaseModel):
     status: str
     context_source: str
     context_initialized: bool
     refresh_schedule: str | None
+
+
+BLOCKED_IMPORT_PATTERN = re.compile(
+    r"\b(?:import|from)\s+(?:os|sys|subprocess|shutil|glob|tempfile|pickle|socket|http|urllib|requests|pathlib)\b"
+)
+BLOCKED_BUILTIN_PATTERN = re.compile(
+    r"\b(?:__import__|exec|eval|compile|open|getattr|setattr|delattr)\s*\("
+)
+CHART_EXEC_TIMEOUT_SECS = 30
+_chart_executor = ThreadPoolExecutor(max_workers=4)
+
+SAFE_BUILTINS = {
+    name: __builtins__[name] if isinstance(__builtins__, dict) else getattr(__builtins__, name)
+    for name in [
+        "abs", "all", "any", "bin", "bool", "bytes", "callable", "chr", "complex",
+        "dict", "dir", "divmod", "enumerate", "filter", "float", "format", "frozenset",
+        "hash", "hex", "id", "int", "isinstance", "issubclass", "iter", "len", "list",
+        "map", "max", "min", "next", "oct", "ord", "pow", "print", "property", "range",
+        "repr", "reversed", "round", "set", "slice", "sorted", "str", "sum", "super",
+        "tuple", "type", "zip", "True", "False", "None",
+        "ValueError", "TypeError", "KeyError", "IndexError", "AttributeError",
+        "RuntimeError", "StopIteration", "ZeroDivisionError", "Exception",
+    ]
+    if (isinstance(__builtins__, dict) and name in __builtins__)
+    or (not isinstance(__builtins__, dict) and hasattr(__builtins__, name))
+}
+
+
+def _validate_chart_code(code: str) -> str | None:
+    """Returns an error message if the code contains blocked patterns, None if safe."""
+    if BLOCKED_IMPORT_PATTERN.search(code):
+        match = BLOCKED_IMPORT_PATTERN.search(code)
+        return f"Blocked import detected: '{match.group()}'. Only pandas, numpy, plotly, math, datetime, and statistics are allowed."
+    if BLOCKED_BUILTIN_PATTERN.search(code):
+        match = BLOCKED_BUILTIN_PATTERN.search(code)
+        return f"Blocked builtin detected: '{match.group()}'. Direct use of __import__, exec, eval, compile, open, getattr, setattr, delattr is not allowed."
+    return None
 
 
 def _convert_value(v: object):
@@ -219,9 +272,7 @@ async def refresh_context():
 @app.post("/execute_sql", response_model=ExecuteSQLResponse)
 async def execute_sql(request: ExecuteSQLRequest):
     try:
-        # Load the nao config from the project folder
         project_path = Path(request.nao_project_folder)
-        os.chdir(project_path)
         config = NaoConfig.try_load(project_path, raise_on_error=True)
         assert config is not None
 
@@ -278,6 +329,70 @@ async def execute_sql(request: ExecuteSQLRequest):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/execute_chart_python", response_model=ExecuteChartPythonResponse)
+async def execute_chart_python(request: ExecuteChartPythonRequest):
+    validation_error = _validate_chart_code(request.python_code)
+    if validation_error:
+        raise HTTPException(status_code=400, detail=validation_error)
+
+    df = pd.DataFrame(request.data)
+    namespace = {
+        "__builtins__": SAFE_BUILTINS,
+        "df": df,
+        "pd": pd,
+        "np": np,
+        "px": px,
+        "go": go,
+        "math": math,
+        "datetime": datetime,
+        "date": date,
+        "statistics": statistics,
+    }
+
+    def _run_code():
+        exec(request.python_code, namespace)
+
+    try:
+        loop = asyncio.get_running_loop()
+        await asyncio.wait_for(
+            loop.run_in_executor(_chart_executor, _run_code),
+            timeout=CHART_EXEC_TIMEOUT_SECS,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Chart code execution timed out after {CHART_EXEC_TIMEOUT_SECS} seconds.",
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail=traceback.format_exc(),
+        )
+
+    fig = namespace.get("fig")
+    if fig is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Code must assign a plotly Figure to a variable named `fig`.",
+        )
+
+    if not isinstance(fig, go.Figure):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Variable `fig` must be a plotly Figure, got {type(fig).__name__}.",
+        )
+
+    try:
+        html = fig.to_html(full_html=False, include_plotlyjs="cdn")
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to convert figure to HTML: {traceback.format_exc()}",
+        )
+
+    return ExecuteChartPythonResponse(html=html)
 
 
 if __name__ == "__main__":
