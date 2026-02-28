@@ -30,6 +30,15 @@ export const DisplayChartToolCall = ({ toolPart }: ToolCallComponentProps<'displ
 	return <PlotlyIframe html={html} />;
 };
 
+/** Stub for upstream Stories compatibility — recharts chart display is not available with Plotly backend. */
+export function ChartDisplay(_props: Record<string, unknown>) {
+	return (
+		<div className='flex items-center justify-center aspect-3/2 rounded-lg border border-dashed text-sm text-muted-foreground'>
+			Chart preview is not available (Plotly backend)
+		</div>
+	);
+}
+
 function PlotlyIframe({ html }: { html: string }) {
 	const iframeRef = useRef<HTMLIFrameElement>(null);
 	const [height, setHeight] = useState(450);

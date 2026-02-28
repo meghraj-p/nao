@@ -7,17 +7,17 @@ import { resolveProjectFolder } from '../utils/tools';
 /**
  * Reads user-defined rules from RULES.md in the project folder if it exists
  */
-export function getUserRules(): string | null {
+export function getUserRules(): string | undefined {
 	const projectFolder = env.NAO_DEFAULT_PROJECT_PATH;
 
 	if (!projectFolder) {
-		return null;
+		return undefined;
 	}
 
 	const rulesPath = join(resolveProjectFolder(projectFolder), 'RULES.md');
 
 	if (!existsSync(rulesPath)) {
-		return null;
+		return undefined;
 	}
 
 	try {
@@ -25,7 +25,7 @@ export function getUserRules(): string | null {
 		return rulesContent;
 	} catch (error) {
 		console.error('Error reading RULES.md:', error);
-		return null;
+		return undefined;
 	}
 }
 
@@ -34,17 +34,17 @@ type Connection = {
 	database: string;
 };
 
-export function getConnections(): Connection[] | null {
+export function getConnections(): Connection[] | undefined {
 	const projectFolder = env.NAO_DEFAULT_PROJECT_PATH;
 
 	if (!projectFolder) {
-		return null;
+		return undefined;
 	}
 
 	const databasesPath = join(resolveProjectFolder(projectFolder), 'databases');
 
 	if (!existsSync(databasesPath)) {
-		return null;
+		return undefined;
 	}
 
 	try {
@@ -70,9 +70,9 @@ export function getConnections(): Connection[] | null {
 			}
 		}
 
-		return connections.length > 0 ? connections : null;
+		return connections.length > 0 ? connections : undefined;
 	} catch (error) {
 		console.error('Error reading databases folder:', error);
-		return null;
+		return undefined;
 	}
 }

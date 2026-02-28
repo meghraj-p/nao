@@ -4,10 +4,10 @@ import { check, index, integer, primaryKey, sqliteTable, text, unique } from 'dr
 
 import { AgentSettings } from '../types/agent-settings';
 import { StopReason, ToolState, UIMessagePartType } from '../types/chat';
-import { LlmProvider } from '../types/llm';
+import { LLM_INFERENCE_TYPES, LlmProvider } from '../types/llm';
+import { MEMORY_CATEGORIES } from '../types/memory';
 import { ORG_ROLES } from '../types/organization';
 import { USER_ROLES } from '../types/project';
-import { MEMORY_CATEGORIES } from '../utils/memory';
 
 export const user = sqliteTable('user', {
 	id: text('id').primaryKey(),
@@ -207,6 +207,7 @@ export const chatMessage = sqliteTable(
 		errorMessage: text('error_message'),
 		llmProvider: text('llm_provider').$type<LlmProvider>(),
 		llmModelId: text('llm_model_id'),
+		supersededAt: integer('superseded_at', { mode: 'timestamp_ms' }),
 		createdAt: integer('created_at', { mode: 'timestamp_ms' })
 			.default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
 			.notNull(),
@@ -247,7 +248,7 @@ export const messagePart = sqliteTable(
 		reasoningText: text('reasoning_text'),
 
 		// tool call columns
-		toolCallId: text('tool_call_id'),
+		toolCallId: text('tool_call_id').unique(),
 		toolName: text('tool_name'),
 		toolState: text('tool_state').$type<ToolState>(),
 		toolErrorText: text('tool_error_text'),
@@ -342,6 +343,48 @@ export const projectLlmConfig = sqliteTable(
 	],
 );
 
+export const STORY_VISIBILITY = ['project', 'specific'] as const;
+
+export const sharedStory = sqliteTable(
+	'shared_story',
+	{
+		id: text('id')
+			.$defaultFn(() => crypto.randomUUID())
+			.primaryKey(),
+		projectId: text('project_id')
+			.notNull()
+			.references(() => project.id, { onDelete: 'cascade' }),
+		userId: text('user_id')
+			.notNull()
+			.references(() => user.id, { onDelete: 'cascade' }),
+		chatId: text('chat_id')
+			.notNull()
+			.references(() => chat.id, { onDelete: 'cascade' }),
+		storyId: text('story_id').notNull(),
+		visibility: text('visibility', { enum: STORY_VISIBILITY }).default('project').notNull(),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' })
+			.default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+			.notNull(),
+	},
+	(t) => [
+		index('shared_story_projectId_idx').on(t.projectId),
+		index('shared_story_chat_story_idx').on(t.chatId, t.storyId),
+	],
+);
+
+export const sharedStoryAccess = sqliteTable(
+	'shared_story_access',
+	{
+		sharedStoryId: text('shared_story_id')
+			.notNull()
+			.references(() => sharedStory.id, { onDelete: 'cascade' }),
+		userId: text('user_id')
+			.notNull()
+			.references(() => user.id, { onDelete: 'cascade' }),
+	},
+	(t) => [primaryKey({ columns: [t.sharedStoryId, t.userId] })],
+);
+
 export const projectSavedPrompt = sqliteTable(
 	'project_saved_prompt',
 	{
@@ -364,6 +407,34 @@ export const projectSavedPrompt = sqliteTable(
 	(t) => [index('project_saved_prompt_projectId_idx').on(t.projectId)],
 );
 
+export const STORY_ACTIONS = ['create', 'update', 'replace'] as const;
+export const STORY_SOURCES = ['assistant', 'user'] as const;
+
+export const storyVersion = sqliteTable(
+	'story_version',
+	{
+		id: text('id')
+			.$defaultFn(() => crypto.randomUUID())
+			.primaryKey(),
+		chatId: text('chat_id')
+			.notNull()
+			.references(() => chat.id, { onDelete: 'cascade' }),
+		storyId: text('story_id').notNull(),
+		version: integer('version').notNull(),
+		title: text('title').notNull(),
+		code: text('code').notNull(),
+		action: text('action', { enum: STORY_ACTIONS }).notNull(),
+		source: text('source', { enum: STORY_SOURCES }).notNull(),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' })
+			.default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+			.notNull(),
+	},
+	(t) => [
+		index('story_version_chat_story_idx').on(t.chatId, t.storyId),
+		unique('story_version_chat_story_version_unique').on(t.chatId, t.storyId, t.version),
+	],
+);
+
 export const memories = sqliteTable(
 	'memories',
 	{
@@ -383,6 +454,60 @@ export const memories = sqliteTable(
 			.$onUpdate(() => new Date())
 			.notNull(),
 		chatId: text('chat_id').references(() => chat.id, { onDelete: 'set null' }),
+		supersededBy: text('superseded_by'),
 	},
-	(t) => [index('memories_userId_idx').on(t.userId), index('memories_chatId_idx').on(t.chatId)],
+	(t) => [
+		index('memories_userId_idx').on(t.userId),
+		index('memories_chatId_idx').on(t.chatId),
+		index('memories_supersededBy_idx').on(t.supersededBy),
+	],
 );
+
+export const llmInference = sqliteTable(
+	'llm_inference',
+	{
+		id: text('id')
+			.$defaultFn(() => crypto.randomUUID())
+			.primaryKey(),
+		projectId: text('project_id')
+			.notNull()
+			.references(() => project.id, { onDelete: 'cascade' }),
+		userId: text('user_id')
+			.notNull()
+			.references(() => user.id, { onDelete: 'cascade' }),
+		chatId: text('chat_id').references(() => chat.id, { onDelete: 'set null' }),
+		type: text('type', { enum: LLM_INFERENCE_TYPES }).notNull(),
+		llmProvider: text('llm_provider').$type<LlmProvider>().notNull(),
+		llmModelId: text('llm_model_id').notNull(),
+
+		// Token usage
+		inputTotalTokens: integer('input_total_tokens'),
+		inputNoCacheTokens: integer('input_no_cache_tokens'),
+		inputCacheReadTokens: integer('input_cache_read_tokens'),
+		inputCacheWriteTokens: integer('input_cache_write_tokens'),
+		outputTotalTokens: integer('output_total_tokens'),
+		outputTextTokens: integer('output_text_tokens'),
+		outputReasoningTokens: integer('output_reasoning_tokens'),
+		totalTokens: integer('total_tokens'),
+
+		createdAt: integer('created_at', { mode: 'timestamp_ms' })
+			.default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+			.notNull(),
+	},
+	(t) => [
+		index('llm_inference_projectId_idx').on(t.projectId),
+		index('llm_inference_userId_idx').on(t.userId),
+		index('llm_inference_type_idx').on(t.type),
+	],
+);
+
+export const message_part_chart_image = sqliteTable('chart_image', {
+	id: text('id')
+		.$defaultFn(() => crypto.randomUUID())
+		.primaryKey(),
+	toolCallId: text('tool_call_id').notNull().unique(),
+	data: text('data').notNull(),
+	createdAt: integer('created_at', { mode: 'timestamp_ms' })
+		.default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+		.notNull(),
+});

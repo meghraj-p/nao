@@ -113,6 +113,34 @@
       "when": 1771614350511,
       "tag": "0015_user_memory_enabled",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "6",
+      "when": 1771694141518,
+      "tag": "0016_chat_message_superseded_at",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1772031581593,
+      "tag": "0017_llm_inference_memory_superseded_by",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1772124770677,
+      "tag": "0018_added_message_part_chart_image",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1772144197644,
+      "tag": "0019_add_stories",
+      "breakpoints": true
     }
   ]
 }

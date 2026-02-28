@@ -13,22 +13,18 @@ import {
 
 import { CACHE_1H, CACHE_5M } from '../agents/providers';
 import { getTools } from '../agents/tools';
-import { SystemPrompt } from '../components/system-prompt';
+import { getConnections, getUserRules } from '../agents/user-rules';
+import { SystemPrompt } from '../components/ai';
 import { renderToMarkdown } from '../lib/markdown';
 import * as chatQueries from '../queries/chat.queries';
 import * as projectQueries from '../queries/project.queries';
 import * as llmConfigQueries from '../queries/project-llm-config.queries';
-import { Mention, TokenCost, TokenUsage, UIChat, UIMessage } from '../types/chat';
+import { AgentSettings } from '../types/agent-settings';
+import { Mention, MessageCustomDataParts, TokenCost, TokenUsage, UIChat, UIMessage } from '../types/chat';
 import { ToolContext } from '../types/tools';
-import {
-	convertToCost,
-	convertToTokenUsage,
-	findLastUserMessage,
-	getLastUserMessageText,
-	retrieveProjectById,
-} from '../utils/ai';
+import { convertToCost, convertToTokenUsage, findLastUserMessage, retrieveProjectById } from '../utils/ai';
+import { HandlerError } from '../utils/error';
 import { getDefaultModelId, getEnvModelSelections, ModelSelection, resolveProviderModel } from '../utils/llm';
-import { resolveProjectFolder } from '../utils/tools';
 import { memoryService } from './memory';
 import { skillService } from './skill.service';
 
@@ -59,23 +55,19 @@ type AgentChat = UIChat & {
 export class AgentService {
 	private _agents = new Map<string, AgentManager>();
 
-	async create(
-		chat: AgentChat,
-		abortController: AbortController,
-		modelSelection?: ModelSelection,
-	): Promise<AgentManager> {
+	async create(chat: AgentChat, modelSelection?: ModelSelection): Promise<AgentManager> {
 		this._disposeAgent(chat.id);
 		const resolvedModelSelection = await this._getResolvedModelSelection(chat.projectId, modelSelection);
 		const modelConfig = await this._getModelConfig(chat.projectId, resolvedModelSelection);
 		const agentSettings = await projectQueries.getAgentSettings(chat.projectId);
-		const toolContext = await this._getToolContext(chat.projectId);
+		const toolContext = await this._getToolContext(chat.projectId, chat.id, agentSettings);
 		const agentTools = getTools(agentSettings);
 		const agent = new AgentManager(
 			chat,
 			modelConfig,
 			resolvedModelSelection,
 			() => this._agents.delete(chat.id),
-			abortController,
+			new AbortController(),
 			agentTools,
 			toolContext,
 		);
@@ -107,16 +99,22 @@ export class AgentService {
 			return envSelection;
 		}
 
-		throw Error('No model config found');
+		throw new HandlerError('BAD_REQUEST', 'No model config found');
 	}
 
-	private async _getToolContext(projectId: string): Promise<ToolContext> {
+	private async _getToolContext(
+		projectId: string,
+		chatId: string,
+		agentSettings: AgentSettings | null,
+	): Promise<ToolContext> {
 		const project = await retrieveProjectById(projectId);
 		if (!project.path) {
-			throw Error('Project path does not exist.');
+			throw new HandlerError('BAD_REQUEST', 'Project path does not exist.');
 		}
 		return {
-			projectFolder: resolveProjectFolder(project.path),
+			projectFolder: project.path ?? '',
+			chatId,
+			agentSettings,
 		};
 	}
 
@@ -139,7 +137,7 @@ export class AgentService {
 	): Promise<Pick<ToolLoopAgentSettings, 'model' | 'providerOptions'>> {
 		const result = await resolveProviderModel(projectId, modelSelection.provider, modelSelection.modelId);
 		if (!result) {
-			throw Error('No model config found');
+			throw new HandlerError('BAD_REQUEST', 'The selected model could not be resolved.');
 		}
 		return result;
 	}
@@ -172,9 +170,9 @@ class AgentManager {
 	stream(
 		uiMessages: UIMessage[],
 		opts: {
-			sendNewChatData: boolean;
+			events?: Partial<MessageCustomDataParts>;
 			mentions?: Mention[];
-		},
+		} = {},
 	): ReadableStream<InferUIMessageChunk<UIMessage>> {
 		let error: unknown = undefined;
 		let result: StreamTextResult<AgentTools, never> | undefined;
@@ -182,15 +180,18 @@ class AgentManager {
 		return createUIMessageStream<UIMessage>({
 			generateId: () => crypto.randomUUID(),
 			execute: async ({ writer }) => {
-				if (opts.sendNewChatData) {
+				if (opts.events?.newChat) {
 					writer.write({
 						type: 'data-newChat',
-						data: {
-							id: this.chat.id,
-							title: this.chat.title,
-							createdAt: this.chat.createdAt,
-							updatedAt: this.chat.updatedAt,
-						},
+						data: opts.events.newChat,
+					});
+				}
+
+				if (opts.events?.newUserMessage) {
+					writer.write({
+						type: 'data-newUserMessage',
+						data: opts.events.newUserMessage,
+						transient: true,
 					});
 				}
 
@@ -214,7 +215,8 @@ class AgentManager {
 				try {
 					const stopReason = e.isAborted ? 'interrupted' : e.finishReason;
 					const tokenUsage = await this._getTotalUsage(result);
-					await chatQueries.upsertMessage(e.responseMessage, {
+					await chatQueries.upsertMessage({
+						...e.responseMessage,
 						chatId: this.chat.id,
 						stopReason,
 						error,
@@ -234,26 +236,25 @@ class AgentManager {
 	 */
 	private async _buildModelMessages(uiMessages: UIMessage[], mentions?: Mention[]): Promise<ModelMessage[]> {
 		uiMessages = this._addSkills(uiMessages, mentions);
-		uiMessages = this._fillEmptyAssistantTurns(uiMessages, '[NO CONTENT]');
-		const modelMessages = await convertToModelMessages(uiMessages);
+		const modelMessages = await convertToModelMessages(uiMessages, { tools: this._agentTools });
 		const memories = await memoryService.safeGetUserMemories(this.chat.userId, this.chat.projectId, this.chat.id);
-		const systemPrompt = renderToMarkdown(SystemPrompt({ memories }));
+		const userRules = getUserRules();
+		const connections = getConnections();
+		const skills = skillService.getSkills();
+		const systemPrompt = renderToMarkdown(SystemPrompt({ memories, userRules, connections, skills }));
 		const systemMessage: ModelMessage = { role: 'system', content: systemPrompt };
 		modelMessages.unshift(systemMessage);
 		return modelMessages;
 	}
 
 	private _scheduleMemoryExtraction(uiMessages: UIMessage[]): void {
-		const lastUserText = getLastUserMessageText(uiMessages);
-		if (lastUserText) {
-			memoryService.safeScheduleMemoryExtraction({
-				userId: this.chat.userId,
-				projectId: this.chat.projectId,
-				chatId: this.chat.id,
-				userMessage: lastUserText,
-				provider: this._modelSelection.provider,
-			});
-		}
+		memoryService.safeScheduleMemoryExtraction({
+			userId: this.chat.userId,
+			projectId: this.chat.projectId,
+			chatId: this.chat.id,
+			messages: uiMessages,
+			provider: this._modelSelection.provider,
+		});
 	}
 
 	private async _getTotalUsage(
@@ -302,19 +303,6 @@ class AgentManager {
 
 	stop(): void {
 		this._abortController.abort();
-	}
-
-	private _fillEmptyAssistantTurns(messages: UIMessage[], fillText: string): UIMessage[] {
-		return messages.map((msg) => {
-			if (msg.role !== 'assistant') {
-				return msg;
-			}
-			const hasTextPart = msg.parts.some((part) => part.type === 'text');
-			if (!hasTextPart) {
-				msg.parts.push({ type: 'text', text: fillText });
-			}
-			return msg;
-		});
 	}
 
 	private _addSkills(messages: UIMessage[], mentions?: Mention[]): UIMessage[] {

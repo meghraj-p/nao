@@ -1,15 +1,12 @@
-import { createContext, useContext } from 'react';
-import { useMemoObject } from '@/hooks/useMemoObject';
+import { createContext, useContext, useMemo } from 'react';
 
 interface SidePanelContext {
-	content: React.ReactNode;
-	open: (content: React.ReactNode) => void;
+	isVisible: boolean;
+	currentStoryId: string | null;
+	open: (content: React.ReactNode, storyId?: string) => void;
 }
 
-const SidePanelContext = createContext<{
-	content: React.ReactNode;
-	open: (content: React.ReactNode) => void;
-} | null>(null);
+const SidePanelContext = createContext<SidePanelContext | null>(null);
 
 export const useSidePanel = () => {
 	const context = useContext(SidePanelContext);
@@ -19,6 +16,17 @@ export const useSidePanel = () => {
 	return context;
 };
 
-export const SidePanelProvider = ({ children, value }: { children: React.ReactNode; value: SidePanelContext }) => {
-	return <SidePanelContext.Provider value={useMemoObject(value)}>{children}</SidePanelContext.Provider>;
+export const SidePanelProvider = ({
+	children,
+	isVisible,
+	currentStoryId,
+	open,
+}: {
+	children: React.ReactNode;
+	isVisible: boolean;
+	currentStoryId: string | null;
+	open: (content: React.ReactNode, storyId?: string) => void;
+}) => {
+	const value = useMemo(() => ({ isVisible, currentStoryId, open }), [isVisible, currentStoryId, open]);
+	return <SidePanelContext.Provider value={value}>{children}</SidePanelContext.Provider>;
 };

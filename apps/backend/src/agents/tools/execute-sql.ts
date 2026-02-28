@@ -4,6 +4,7 @@ import { executeSql as schemas } from '@nao/shared/tools';
 import { ExecuteSqlOutput, renderToModelOutput } from '../../components/tool-outputs';
 import { env } from '../../env';
 import { ToolContext } from '../../types/tools';
+import { isReadOnlySqlQuery } from '../../utils/sql-filter';
 import { createTool } from '../../utils/tools';
 
 const MAX_CACHED_QUERIES = 50;
@@ -47,6 +48,14 @@ export async function executeQuery(
 	context: ToolContext,
 ): Promise<executeSql.Output> {
 	const naoProjectFolder = context.projectFolder;
+
+	const writePermEnabled = context.agentSettings?.sql?.dangerouslyWritePermEnabled ?? false;
+	if (!writePermEnabled && !(await isReadOnlySqlQuery(sql_query))) {
+		throw new Error(
+			'Write SQL operations are disabled. Only SELECT queries are allowed. ' +
+				'Enable "Dangerous write permissions" in the admin panel to allow INSERT, UPDATE, DELETE and DDL queries.',
+		);
+	}
 
 	const response = await fetch(`http://localhost:${env.FASTAPI_PORT}/execute_sql`, {
 		method: 'POST',
