@@ -18,7 +18,7 @@ import { ProviderModelResult } from '../agents/providers';
 import { getTools } from '../agents/tools';
 import { createWebSearchTools } from '../agents/tools/web-search';
 import { getConnections, getTableColumnsContent, getUserRules } from '../agents/user-rules';
-import { SlackSystemPrompt, SystemPrompt } from '../components/ai';
+import { MessagingProviderSystemPrompt, SystemPrompt } from '../components/ai';
 import { DBChat } from '../db/abstractSchema';
 import { renderToMarkdown } from '../lib/markdown';
 import * as chatQueries from '../queries/chat.queries';
@@ -28,6 +28,7 @@ import * as storyQueries from '../queries/story.queries';
 import { AgentSettings } from '../types/agent-settings';
 import { AgentTools, Mention, MessageCustomDataParts, TokenCost, TokenUsage, UIMessage } from '../types/chat';
 import { LlmProvider } from '../types/llm';
+import { Provider } from '../types/messaging-provider';
 import { ToolContext } from '../types/tools';
 import { convertToCost, convertToTokenUsage, findLastUserMessage } from '../utils/ai';
 import { HandlerError } from '../utils/error';
@@ -224,7 +225,7 @@ class AgentManager {
 		opts: {
 			events?: Partial<MessageCustomDataParts>;
 			mentions?: Mention[];
-			isSlack?: boolean;
+			provider?: Provider;
 			timezone?: string;
 		} = {},
 	): ReadableStream<InferUIMessageChunk<UIMessage>> {
@@ -249,7 +250,12 @@ class AgentManager {
 				}
 
 				this._streamWriter = writer;
-				const messages = await this._buildModelMessages(uiMessages, opts.mentions, opts.isSlack, opts.timezone);
+				const messages = await this._buildModelMessages(
+					uiMessages,
+					opts.mentions,
+					opts.provider,
+					opts.timezone,
+				);
 
 				result = await this._agent.stream({
 					messages,
@@ -295,7 +301,7 @@ class AgentManager {
 	private async _buildModelMessages(
 		uiMessages: UIMessage[],
 		mentions?: Mention[],
-		isSlack?: boolean,
+		provider?: Provider,
 		timezone?: string,
 	): Promise<ModelMessage[]> {
 		const uiMessagesWithStories = await this._syncStoryToolOutputs(uiMessages);
@@ -309,7 +315,9 @@ class AgentManager {
 		const connections = getConnections();
 		const skills = skillService.getSkills();
 		const basePrompt = renderToMarkdown(SystemPrompt({ memories, userRules, connections, skills, timezone }));
-		const systemPrompt = isSlack ? renderToMarkdown(SlackSystemPrompt({ basePrompt })) : basePrompt;
+		const systemPrompt = provider
+			? renderToMarkdown(MessagingProviderSystemPrompt({ basePrompt, provider }))
+			: basePrompt;
 
 		const systemMessage: Omit<UIMessage, 'id'> = {
 			role: 'system',

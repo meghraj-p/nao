@@ -185,6 +185,7 @@ export function SlackForm({ projectId, redirectUrl, hasProjectConfig, onSubmit, 
 						<strong>OAuth &amp; Permissions</strong> (Bot Token) and <strong>Basic Information</strong>{' '}
 						(Signing Secret).
 					</p>
+					<PasswordField form={form} name='botToken' label='Bot Token' placeholder='xoxb-...' required />
 					<PasswordField
 						form={form}
 						name='signingSecret'
@@ -192,7 +193,6 @@ export function SlackForm({ projectId, redirectUrl, hasProjectConfig, onSubmit, 
 						placeholder='Enter your Slack signing secret'
 						required
 					/>
-					<PasswordField form={form} name='botToken' label='Bot Token' placeholder='xoxb-...' required />
 				</div>
 
 				<div className='flex justify-end gap-2 pt-2'>
@@ -202,7 +202,7 @@ export function SlackForm({ projectId, redirectUrl, hasProjectConfig, onSubmit, 
 					<form.Subscribe selector={(state: { canSubmit: boolean }) => state.canSubmit}>
 						{(canSubmit: boolean) => (
 							<Button size='sm' type='submit' disabled={!canSubmit || isPending}>
-								{hasProjectConfig ? 'Update' : 'Add'}
+								{hasProjectConfig ? 'Update' : 'Save'}
 							</Button>
 						)}
 					</form.Subscribe>

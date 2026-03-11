@@ -17,6 +17,7 @@ import { trpc } from '@/main';
 import { STORY_MENTION_ID } from '@/components/chat-input-prompt';
 import StoryIcon from '@/components/ui/story-icon';
 import SlackIcon from '@/components/icons/slack.svg';
+import TeamsIcon from '@/components/icons/microsoft-teams.svg';
 
 const messageTheme: PromptTheme = {
 	backgroundColor: 'transparent',
@@ -106,6 +107,12 @@ export const UserMessage = memo(({ message }: { message: UIMessage }) => {
 					<span className='flex items-center justify-end gap-1 text-xs text-muted-foreground mb-2'>
 						<SlackIcon className='size-3.5' />
 						sent in Slack
+					</span>
+				)}
+				{message.source === 'teams' && (
+					<span className='flex items-center justify-end gap-1 text-xs text-muted-foreground mb-2'>
+						<TeamsIcon className='size-4' />
+						sent in Teams
 					</span>
 				)}
 				<Message value={text} mentionConfigs={mentionConfigs} theme={messageTheme} className='inline' />
