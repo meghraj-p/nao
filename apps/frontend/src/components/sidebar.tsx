@@ -6,6 +6,7 @@ import { SidebarUserMenu } from './sidebar-user-menu';
 import { SidebarSettingsNav } from './sidebar-settings-nav';
 
 import StoryIcon from './ui/story-icon';
+import { SidebarCommunity } from './sidebar-community';
 import type { LucideIcon } from 'lucide-react';
 import type { ChatListItem as ChatListItemType } from '@nao/backend/chat';
 import { Button } from '@/components/ui/button';
@@ -164,6 +165,7 @@ export function Sidebar() {
 			)}
 
 			<div className={cn('mt-auto transition-[padding] duration-300', effectiveIsCollapsed ? 'p-1' : 'p-2')}>
+				{isInSettings && <SidebarCommunity isCollapsed={effectiveIsCollapsed} />}
 				<SidebarUserMenu isCollapsed={effectiveIsCollapsed} />
 			</div>
 		</div>
