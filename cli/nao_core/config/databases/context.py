@@ -85,6 +85,12 @@ class DatabaseContext:
         """Return the table description if available."""
         return None
 
+    def indexes(self) -> str | None:
+        """Return index/ordering key information if available (e.g. ORDER BY, PRIMARY KEY, indexes).
+        Used by table metadata templates so the agent knows how the table is indexed for querying.
+        """
+        return None
+
     def profiling(self) -> dict[str, Any] | None:
         """Return profiling data for the table."""
         try:

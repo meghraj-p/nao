@@ -3,6 +3,7 @@ from __future__ import annotations
 import fnmatch
 from abc import ABC, abstractmethod
 from enum import Enum
+from typing import cast
 
 import pandas as pd
 import questionary
@@ -15,6 +16,7 @@ class DatabaseType(str, Enum):
 
     ATHENA = "athena"
     BIGQUERY = "bigquery"
+    CLICKHOUSE = "clickhouse"
     DUCKDB = "duckdb"
     DATABRICKS = "databricks"
     FABRIC = "fabric"
@@ -113,10 +115,22 @@ class DatabaseConfig(BaseModel, ABC):
                 return cursor.fetchdf()
             if hasattr(cursor, "to_dataframe"):
                 return cursor.to_dataframe()
+            if hasattr(cursor, "to_pandas"):
+                return cursor.to_pandas()
 
-            columns = pd.Index([desc[0] for desc in cursor.description])
-            rows = [tuple(row) for row in cursor.fetchall()]
-            return pd.DataFrame(rows, columns=columns)
+            # ClickHouse (clickhouse_connect) returns QueryResult with result_rows + column_names
+            if hasattr(cursor, "result_rows") and hasattr(cursor, "column_names"):
+                columns = list(cursor.column_names)
+                return pd.DataFrame(cursor.result_rows, columns=columns)  # type: ignore[arg-type]
+
+            if hasattr(cursor, "description") and cursor.description is not None and hasattr(cursor, "fetchall"):
+                columns = [desc[0] for desc in cursor.description]
+                return pd.DataFrame(cursor.fetchall(), columns=columns)  # type: ignore[arg-type]
+
+            raise TypeError(
+                f"Unsupported raw_sql result type: {type(cursor).__name__}. "
+                "Expected cursor with fetchdf, to_dataframe, to_pandas, result_rows/column_names, or description/fetchall."
+            )
         finally:
             conn.disconnect()
 
@@ -157,7 +171,8 @@ class DatabaseConfig(BaseModel, ABC):
         list_schemas = getattr(conn, "list_schemas", None)
         if callable(list_schemas):
             try:
-                return list_schemas()
+                schemas = cast(list[object], list_schemas())
+                return [str(schema) for schema in schemas]
             except TypeError:
                 # Some backends require positional/keyword args. Fall back to other discovery.
                 pass
@@ -165,7 +180,8 @@ class DatabaseConfig(BaseModel, ABC):
         # Fall back to databases/catalogs if schemas aren't supported.
         list_databases = getattr(conn, "list_databases", None)
         if callable(list_databases):
-            return list_databases()
+            databases = cast(list[object], list_databases())
+            return [str(database) for database in databases]
 
         return []
 

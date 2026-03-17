@@ -115,6 +115,7 @@ def spec(db_config, temp_datasets):
     return SyncTestSpec(
         db_type="bigquery",
         primary_schema=db_config.dataset_id,
+        primary_table_count=3,
         users_column_assertions=(
             "# users",
             f"**Dataset:** `{db_config.dataset_id}`",

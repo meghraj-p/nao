@@ -1,10 +1,11 @@
-from typing import Annotated, Union
+from typing import Annotated, Dict, Type, Union, cast
 
-from pydantic import Discriminator, Tag
+from pydantic import BaseModel, Discriminator, Tag
 
 from .athena import AthenaConfig
 from .base import DatabaseAccessor, DatabaseConfig, DatabaseType
 from .bigquery import BigQueryConfig
+from .clickhouse import ClickHouseConfig
 from .databricks import DatabricksConfig
 from .duckdb import DuckDBConfig
 from .fabric import FabricConfig
@@ -22,6 +23,7 @@ AnyDatabaseConfig = Annotated[
     Union[
         Annotated[AthenaConfig, Tag("athena")],
         Annotated[BigQueryConfig, Tag("bigquery")],
+        Annotated[ClickHouseConfig, Tag("clickhouse")],
         Annotated[DatabricksConfig, Tag("databricks")],
         Annotated[FabricConfig, Tag("fabric")],
         Annotated[SnowflakeConfig, Tag("snowflake")],
@@ -36,9 +38,10 @@ AnyDatabaseConfig = Annotated[
 
 
 # Mapping of database type to config class
-DATABASE_CONFIG_CLASSES: dict[DatabaseType, type[DatabaseConfig]] = {
+DATABASE_CONFIG_CLASSES: Dict[DatabaseType, Type[object]] = {
     DatabaseType.ATHENA: AthenaConfig,
     DatabaseType.BIGQUERY: BigQueryConfig,
+    DatabaseType.CLICKHOUSE: ClickHouseConfig,
     DatabaseType.DUCKDB: DuckDBConfig,
     DatabaseType.DATABRICKS: DatabricksConfig,
     DatabaseType.FABRIC: FabricConfig,
@@ -50,7 +53,7 @@ DATABASE_CONFIG_CLASSES: dict[DatabaseType, type[DatabaseConfig]] = {
 }
 
 
-def parse_database_config(data: dict) -> DatabaseConfig:
+def parse_database_config(data: dict) -> AnyDatabaseConfig:
     """Parse a database config dict into the appropriate type."""
     raw_type = data.get("type")
     if not isinstance(raw_type, str):
@@ -60,14 +63,15 @@ def parse_database_config(data: dict) -> DatabaseConfig:
         db_type = DatabaseType(raw_type)
     except ValueError as e:
         raise ValueError(f"Unknown database type: {raw_type}") from e
-    config_class = DATABASE_CONFIG_CLASSES[db_type]
-    return config_class.model_validate(data)
+    config_class = cast(Type[BaseModel], DATABASE_CONFIG_CLASSES[db_type])
+    return cast(AnyDatabaseConfig, config_class.model_validate(data))
 
 
 __all__ = [
     "AnyDatabaseConfig",
     "AthenaConfig",
     "BigQueryConfig",
+    "ClickHouseConfig",
     "DATABASE_CONFIG_CLASSES",
     "DatabaseAccessor",
     "DatabaseConfig",
