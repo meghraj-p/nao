@@ -177,6 +177,7 @@ export const chat = pgTable(
 			.references(() => project.id, { onDelete: 'cascade' }),
 		title: text('title').notNull().default('New Conversation'),
 		isStarred: boolean('is_starred').default(false).notNull(),
+		deletedAt: timestamp('deleted_at'),
 		slackThreadId: text('slack_thread_id'),
 		teamsThreadId: text('teams_thread_id'),
 		telegramThreadId: text('telegram_thread_id'),
