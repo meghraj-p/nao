@@ -7,17 +7,21 @@ import { Attachment, Chat, Message, Thread } from 'chat';
 import { generateChartImage } from '../components/generate-chart';
 import * as chartImageQueries from '../queries/chart-image';
 import * as chatQueries from '../queries/chat.queries';
+import * as imageQueries from '../queries/image.queries';
 import * as projectQueries from '../queries/project.queries';
 import { WhatsappConfig } from '../queries/project-whatsapp-config.queries';
 import { get as getUser, getByMessagingProviderCode } from '../queries/user.queries';
 import { UIChat, UIMessage, UIMessagePart } from '../types/chat';
 import { ConversationContext, StreamState, ToolCallEntry } from '../types/messaging-provider';
 import { createChatTitle } from '../utils/ai';
+import { buildImageUrl } from '../utils/image';
 import { logger } from '../utils/logger';
 import { EXCLUDED_TOOLS } from '../utils/messaging-provider';
 import { agentService, ModelSelection } from './agent';
 import { posthog, PostHogEvent } from './posthog';
 import * as transcribeService from './transcribe.service';
+
+const SUPPORTED_WHATSAPP_IMAGE_MEDIA_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 
 class WhatsappService {
 	private _bot: Chat | null = null;
@@ -75,37 +79,31 @@ class WhatsappService {
 		});
 
 		this._bot.onNewMention(async (thread, message) => {
-			if (message.text.startsWith('/login')) {
-				await this._handleLoginCommand(thread, message);
-				return;
-			}
-			await this._handleWorkFlow(thread, message);
+			await this._handleIncomingMessage(thread, message);
 		});
 
 		this._bot.onNewMessage(/.*/, async (thread, message) => {
-			if (message.text.startsWith('/login')) {
-				await this._handleLoginCommand(thread, message);
-				return;
-			}
-			await this._handleWorkFlow(thread, message);
+			await this._handleIncomingMessage(thread, message);
 		});
+	}
+
+	private async _handleIncomingMessage(thread: Thread, message: Message): Promise<void> {
+		const normalizedText = (message.text ?? '').trim();
+		if (normalizedText === '/login' || normalizedText.startsWith('/login ')) {
+			await this._handleLoginCommand(thread, message);
+			return;
+		}
+		if (normalizedText === '/new') {
+			await this._handleNewCommand(thread, message);
+			return;
+		}
+		await this._handleWorkFlow(thread, message);
 	}
 
 	private async _handleWorkFlow(thread: Thread, userMessage: Message): Promise<void> {
 		this._markAsReadWithTypingIndicator(userMessage.id);
 
-		const ctx: ConversationContext = {
-			thread,
-			userMessage,
-			user: null,
-			chatId: '',
-			convMessage: null,
-			blocks: [],
-			textBlockIndex: -1,
-			isNewChat: false,
-			modelId: undefined,
-			timezone: undefined,
-		};
+		const ctx = this._createConversationContext(thread, userMessage);
 
 		try {
 			await this._validateUserAccess(ctx);
@@ -147,7 +145,7 @@ class WhatsappService {
 			return;
 		}
 
-		const code = message.text.replace(/^\/login\s+/, '').trim();
+		const code = message.text.trim().slice('/login'.length).trim();
 		if (!code) {
 			await thread.post('❌ Invalid code. Usage: `/login <your-code>`');
 			return;
@@ -165,6 +163,43 @@ class WhatsappService {
 
 	private _getWhatsappId(message: Message): string | null {
 		return message.author.userId || null;
+	}
+
+	private async _handleNewCommand(thread: Thread, userMessage: Message): Promise<void> {
+		this._markAsReadWithTypingIndicator(userMessage.id);
+
+		const ctx = this._createConversationContext(thread, userMessage);
+
+		try {
+			await this._validateUserAccess(ctx);
+		} catch {
+			return;
+		}
+
+		const existingChat = await chatQueries.getChatByWhatsappThread(thread.id);
+		if (!existingChat) {
+			await thread.post('✅ No active chat to reset. Send your next message to start a fresh conversation.');
+			return;
+		}
+
+		agentService.get(existingChat.id)?.stop();
+		await chatQueries.clearWhatsappThread(thread.id);
+		await thread.post('✅ Started a new chat. Send your next message to continue with a fresh context.');
+	}
+
+	private _createConversationContext(thread: Thread, userMessage: Message): ConversationContext {
+		return {
+			thread,
+			userMessage,
+			user: null,
+			chatId: '',
+			convMessage: null,
+			blocks: [],
+			textBlockIndex: -1,
+			isNewChat: false,
+			modelId: undefined,
+			timezone: undefined,
+		};
 	}
 
 	private async _validateUserAccess(ctx: ConversationContext): Promise<void> {
@@ -206,34 +241,48 @@ class WhatsappService {
 	}
 
 	private async _saveOrUpdateUserMessage(ctx: ConversationContext): Promise<void> {
-		const text = await this._resolveUserMessageText(ctx);
+		const { text, imageParts, titleText } = await this._resolveUserMessageContent(ctx);
 		const threadId = ctx.thread.id;
 
 		const existingChat = await chatQueries.getChatByWhatsappThread(threadId);
 		if (existingChat) {
 			await chatQueries.upsertMessage({
 				role: 'user',
-				parts: [{ type: 'text', text }],
+				parts: [{ type: 'text', text }, ...imageParts],
 				chatId: existingChat.id,
 				source: 'whatsapp',
 			});
 			ctx.chatId = existingChat.id;
 			ctx.isNewChat = false;
 		} else {
-			const title = createChatTitle({ text });
+			const title = createChatTitle({ text: titleText });
 			const [createdChat] = await chatQueries.createChat(
 				{ title, userId: ctx.user!.id, projectId: this._projectId, whatsappThreadId: threadId },
 				{ text, source: 'whatsapp' },
+				imageParts,
 			);
 			ctx.chatId = createdChat.id;
 			ctx.isNewChat = true;
 		}
 	}
 
+	private async _resolveUserMessageContent(
+		ctx: ConversationContext,
+	): Promise<{ text: string; imageParts: UIMessagePart[]; titleText: string }> {
+		const text = await this._resolveUserMessageText(ctx);
+		const imageParts = await this._resolveImageParts(ctx);
+
+		return {
+			text,
+			imageParts,
+			titleText: text.trim() || (imageParts.length > 0 ? 'Image message' : text),
+		};
+	}
+
 	private async _resolveUserMessageText(ctx: ConversationContext): Promise<string> {
 		const audioAttachment = this._getAudioAttachment(ctx.userMessage);
 		if (!audioAttachment) {
-			return ctx.userMessage.text;
+			return ctx.userMessage.text ?? '';
 		}
 
 		const agentSettings = await projectQueries.getAgentSettings(this._projectId);
@@ -258,13 +307,61 @@ class WhatsappService {
 		}
 	}
 
+	private async _resolveImageParts(ctx: ConversationContext): Promise<UIMessagePart[]> {
+		const imageAttachments = this._getImageAttachments(ctx.userMessage);
+		if (imageAttachments.length === 0) {
+			return [];
+		}
+
+		try {
+			const savedImages = await imageQueries.saveImages(
+				await Promise.all(
+					imageAttachments.map(async (attachment) => {
+						const mediaType = attachment.mimeType?.toLowerCase();
+						if (!mediaType) {
+							throw new Error('Image MIME type is unavailable');
+						}
+						if (!SUPPORTED_WHATSAPP_IMAGE_MEDIA_TYPES.has(mediaType)) {
+							throw new Error(
+								`Unsupported image format (${mediaType}). Supported formats: PNG, JPEG, GIF, and WEBP.`,
+							);
+						}
+
+						return {
+							mediaType,
+							data: await this._encodeAttachmentAsBase64(attachment),
+						};
+					}),
+				),
+			);
+
+			return savedImages.map(({ id, mediaType }) => ({
+				type: 'file',
+				mediaType,
+				url: buildImageUrl(id),
+			}));
+		} catch (error) {
+			const message = error instanceof Error ? error.message : 'Unknown error';
+			await ctx.thread.post(`❌ I could not process your image attachment. ${message}`);
+			throw new Error(`Failed to process image attachment: ${message}`);
+		}
+	}
+
 	private _getAudioAttachment(message: Message): Attachment | undefined {
-		const placeholderText = message.text.trim();
+		const placeholderText = (message.text ?? '').trim();
 		if (placeholderText !== '[Voice message]' && placeholderText !== '[Audio message]') {
 			return undefined;
 		}
 
 		return message.attachments.find((attachment) => attachment.type === 'audio');
+	}
+
+	private _getImageAttachments(message: Message): Attachment[] {
+		return message.attachments.filter(
+			(attachment) =>
+				attachment.type === 'image' ||
+				(attachment.type === 'file' && attachment.mimeType?.startsWith('image/')),
+		);
 	}
 
 	private async _encodeAttachmentAsBase64(attachment: Attachment): Promise<string> {
@@ -282,7 +379,7 @@ class WhatsappService {
 			return buffer.toString('base64');
 		}
 
-		throw new Error('WhatsApp audio attachment data is unavailable');
+		throw new Error('WhatsApp attachment data is unavailable');
 	}
 
 	private async _handleStreamAgent(chat: UIChat, ctx: ConversationContext): Promise<void> {

@@ -171,6 +171,18 @@ const possibleStaticPaths = [
 ];
 
 const staticRoot = possibleStaticPaths.find((p) => existsSync(p));
+const isReservedBackendPath = (url: string) => {
+	const pathname = url.split('?', 1)[0];
+	return (
+		pathname === '/api' ||
+		pathname.startsWith('/api/') ||
+		pathname === '/c' ||
+		pathname.startsWith('/c/') ||
+		pathname === '/i' ||
+		pathname.startsWith('/i/')
+	);
+};
+
 console.log('Static root:', staticRoot || 'Not found (API-only mode)');
 
 if (staticRoot) {
@@ -182,7 +194,7 @@ if (staticRoot) {
 
 	// SPA fallback: serve index.html for all non-API routes
 	app.setNotFoundHandler((request, reply) => {
-		if (request.url.startsWith('/api') || request.url.startsWith('/c') || request.url.startsWith('/i')) {
+		if (isReservedBackendPath(request.url)) {
 			reply.status(404).send({ error: 'Not found' });
 		} else {
 			reply.sendFile('index.html');
