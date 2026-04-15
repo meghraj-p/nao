@@ -1,11 +1,21 @@
 import { execSync } from 'child_process';
 import { existsSync } from 'fs';
-import puppeteer, { type Browser } from 'puppeteer-core';
+import type { Browser } from 'puppeteer-core';
 
 import type { QueryDataMap, StoryInput } from './story-download';
 import { generateStoryHtml } from './story-html';
 
 let browserPromise: Promise<Browser> | null = null;
+
+async function loadPuppeteer() {
+	try {
+		return await import('puppeteer-core');
+	} catch {
+		throw new Error(
+			'puppeteer-core is not available. PDF export requires puppeteer-core and a Chrome/Chromium installation.',
+		);
+	}
+}
 
 export async function generateStoryPdf(story: StoryInput, queryData: QueryDataMap | null): Promise<Buffer> {
 	const html = generateStoryHtml(story, queryData);
@@ -33,7 +43,8 @@ async function getBrowser(): Promise<Browser> {
 		}
 		await browser.close().catch(() => {});
 	}
-	browserPromise = puppeteer.launch({
+	const puppeteer = await loadPuppeteer();
+	browserPromise = puppeteer.default.launch({
 		headless: true,
 		executablePath: findChromePath(),
 		args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu'],
