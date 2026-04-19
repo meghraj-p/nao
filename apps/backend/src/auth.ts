@@ -3,13 +3,55 @@ import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 
 import { db } from './db/db';
 import dbConfig, { Dialect } from './db/dbConfig';
-import { env } from './env';
+import { env, isCloud } from './env';
 import * as orgQueries from './queries/organization.queries';
-import { isEmailDomainAllowed } from './utils/utils';
+import { emailService } from './services/email';
+import { buildForgotPasswordEmail } from './utils/email-builders';
+import { buildGithubAllowlist, isEmailDomainAllowed } from './utils/utils';
 
 type GoogleConfig = Awaited<ReturnType<typeof orgQueries.getGoogleConfig>>;
 
 function createAuthInstance(googleConfig: GoogleConfig) {
+	const githubAllowlist = buildGithubAllowlist(env.GITHUB_ALLOWED_USERS);
+
+	const socialProviders: Parameters<typeof betterAuth>[0]['socialProviders'] = {
+		google: {
+			prompt: 'select_account',
+			clientId: googleConfig.clientId,
+			clientSecret: googleConfig.clientSecret,
+		},
+	};
+
+	if (env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET) {
+		socialProviders.github = {
+			clientId: env.GITHUB_CLIENT_ID,
+			clientSecret: env.GITHUB_CLIENT_SECRET,
+			getUserInfo: async (token) => {
+				const res = await fetch('https://api.github.com/user', {
+					headers: { Authorization: `Bearer ${token.accessToken}`, Accept: 'application/json' },
+				});
+				const profile = await res.json();
+
+				if (githubAllowlist.size > 0 && !githubAllowlist.has(profile.login)) {
+					throw new APIError('FORBIDDEN', {
+						message: 'Your GitHub account is not authorized to access this application.',
+					});
+				}
+
+				return {
+					user: {
+						id: String(profile.id),
+						name: profile.login as string,
+						email: (profile.email ?? `${profile.login}@users.noreply.github.com`) as string,
+						image: profile.avatar_url as string,
+						emailVerified: true,
+					},
+					data: profile,
+				};
+			},
+		};
+	}
+
 	return betterAuth({
 		secret: env.BETTER_AUTH_SECRET,
 		database: drizzleAdapter(db, {
@@ -19,14 +61,14 @@ function createAuthInstance(googleConfig: GoogleConfig) {
 		trustedOrigins: env.BETTER_AUTH_URL ? [env.BETTER_AUTH_URL] : undefined,
 		emailAndPassword: {
 			enabled: true,
-		},
-		socialProviders: {
-			google: {
-				prompt: 'select_account',
-				clientId: googleConfig.clientId,
-				clientSecret: googleConfig.clientSecret,
+			sendResetPassword: async ({ user, url }) => {
+				if (!emailService.isEnabled()) {
+					return;
+				}
+				emailService.sendEmail(user.email, buildForgotPasswordEmail(user, url));
 			},
 		},
+		socialProviders,
 		databaseHooks: {
 			user: {
 				create: {
@@ -40,10 +82,15 @@ function createAuthInstance(googleConfig: GoogleConfig) {
 						return true;
 					},
 					async after(user, ctx) {
-						const isGoogle = ctx?.params?.id === 'google';
-						await orgQueries.initializeDefaultOrganizationForFirstUser(user.id);
-						if (isGoogle) {
-							await orgQueries.addUserToDefaultProjectIfExists(user.id);
+						const isSocial = ctx?.params?.id === 'google' || ctx?.params?.id === 'github';
+
+						if (isCloud) {
+							await orgQueries.initializePersonalOrganization(user.id);
+						} else {
+							await orgQueries.initializeDefaultOrganizationForFirstUser(user.id);
+							if (isSocial) {
+								await orgQueries.addUserToDefaultProjectIfExists(user.id);
+							}
 						}
 					},
 				},
@@ -52,14 +99,20 @@ function createAuthInstance(googleConfig: GoogleConfig) {
 		user: {
 			additionalFields: {
 				requiresPasswordReset: { type: 'boolean', default: false, input: false },
+				messagingProviderCode: { type: 'string', default: '', input: false },
 			},
 		},
 	});
 }
 
-let authPromise = orgQueries.getGoogleConfig().then(createAuthInstance);
+let authPromise: Promise<ReturnType<typeof createAuthInstance>> | null = null;
 
-export const getAuth = () => authPromise;
+export const getAuth = () => {
+	if (!authPromise) {
+		authPromise = orgQueries.getGoogleConfig().then(createAuthInstance);
+	}
+	return authPromise;
+};
 
 export function updateAuth() {
 	authPromise = orgQueries.getGoogleConfig().then(createAuthInstance);

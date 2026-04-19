@@ -1,34 +1,41 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { useParams } from '@tanstack/react-router';
+import { useIsMobile } from '@/hooks/use-is-mobile';
 import { useSidebar } from '@/contexts/sidebar';
 import {
 	SIDEBAR_DELTA,
 	SIDE_PANEL_ANIMATION_DURATION,
-	SIDE_PANEL_DEFAULT_WIDTH_RATIO,
 	SIDE_PANEL_MIN_WIDTH,
+	loadPersistedWidthRatio,
 } from '@/lib/side-panel';
 
 export const useSidePanel = ({
 	containerRef,
 	sidePanelRef,
+	defaultWidthRatio,
+	shouldCollapseSidebar = true,
 }: {
 	containerRef: React.RefObject<HTMLDivElement | null>;
 	sidePanelRef: React.RefObject<HTMLDivElement | null>;
+	defaultWidthRatio?: number;
+	shouldCollapseSidebar?: boolean;
 }) => {
 	const didCollapseSidebarRef = useRef(false);
 	const resizeHandleRef = useRef<HTMLDivElement>(null);
 
 	const [content, setContent] = useState<React.ReactNode>(null);
+	const [currentStorySlug, setCurrentStorySlug] = useState<string | null>(null);
 
 	const [isVisible, setIsVisible] = useState(false);
 	const [isAnimating, setIsAnimating] = useState(false);
 
 	const removeTransitionEndEventListener = useRef<(() => void) | null>(null);
 
+	const isMobile = useIsMobile();
 	const { collapse: collapseSidebar, expand: expandSidebar, isCollapsed: isSidebarCollapsed } = useSidebar();
 
-	const chatId = useParams({ strict: false, select: (params) => params.chatId });
+	const routeKey = useParams({ strict: false, select: (params) => params.chatId ?? params.shareId });
 
 	const animateSidePanel = useCallback(
 		({ onComplete, ...style }: { onComplete?: () => void } & React.CSSProperties) => {
@@ -81,12 +88,17 @@ export const useSidePanel = ({
 			return;
 		}
 
+		if (isMobile) {
+			return;
+		}
+
 		sidePanel.style.width = '0px';
 		sidePanel.style.opacity = '0';
 
-		const containerWidth =
-			container.getBoundingClientRect().width + (didCollapseSidebarRef.current ? SIDEBAR_DELTA : 0);
-		const targetWidth = Math.floor(SIDE_PANEL_DEFAULT_WIDTH_RATIO * containerWidth);
+		const sidebarDelta = shouldCollapseSidebar && didCollapseSidebarRef.current ? SIDEBAR_DELTA : 0;
+		const containerWidth = container.getBoundingClientRect().width + sidebarDelta;
+		const ratio = defaultWidthRatio !== undefined ? defaultWidthRatio : loadPersistedWidthRatio();
+		const targetWidth = Math.floor(ratio * containerWidth);
 
 		animateSidePanel({
 			width: `${targetWidth}px`,
@@ -95,16 +107,19 @@ export const useSidePanel = ({
 				sidePanel.style.minWidth = `${SIDE_PANEL_MIN_WIDTH}px`;
 			},
 		});
-	}, [isVisible, animateSidePanel, containerRef, sidePanelRef]);
+	}, [isVisible, isMobile, animateSidePanel, containerRef, sidePanelRef, defaultWidthRatio, shouldCollapseSidebar]);
 
 	const open = useCallback(
-		(newContent: React.ReactNode) => {
+		(newContent: React.ReactNode, storySlug?: string) => {
 			setIsVisible(true);
 			setContent(newContent);
-			didCollapseSidebarRef.current = !isSidebarCollapsed;
-			collapseSidebar({ persist: false });
+			setCurrentStorySlug(storySlug ?? null);
+			if (!isMobile && shouldCollapseSidebar) {
+				didCollapseSidebarRef.current = !isSidebarCollapsed;
+				collapseSidebar({ persist: false });
+			}
 		},
-		[collapseSidebar, isSidebarCollapsed],
+		[isMobile, shouldCollapseSidebar, collapseSidebar, isSidebarCollapsed],
 	);
 
 	const expandSidebarIfWasCollapsed = useCallback(() => {
@@ -115,28 +130,32 @@ export const useSidePanel = ({
 	}, [expandSidebar]);
 
 	const close = useCallback(() => {
-		expandSidebarIfWasCollapsed();
-		animateSidePanel({
-			width: '0px',
-			opacity: '0',
-			onComplete: () => {
-				setIsVisible(false);
-				setContent(null);
-			},
-		});
-	}, [expandSidebarIfWasCollapsed, animateSidePanel]);
+		setIsVisible(false);
+		if (isMobile) {
+			setContent(null);
+		} else {
+			expandSidebarIfWasCollapsed();
+			animateSidePanel({
+				width: '0px',
+				opacity: '0',
+				onComplete: () => setContent(null),
+			});
+		}
+	}, [isMobile, expandSidebarIfWasCollapsed, animateSidePanel]);
 
 	useEffect(() => {
 		expandSidebarIfWasCollapsed();
 		setIsVisible(false);
 		setContent(null);
-	}, [chatId, expandSidebarIfWasCollapsed]);
+		setCurrentStorySlug(null);
+	}, [routeKey, expandSidebarIfWasCollapsed]);
 
 	return {
 		resizeHandleRef,
 		isVisible,
 		isAnimating,
 		content,
+		currentStorySlug,
 		open,
 		close,
 	};

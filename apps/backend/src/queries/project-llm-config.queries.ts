@@ -1,8 +1,8 @@
+import type { LlmProvider } from '@nao/shared/types';
 import { and, eq } from 'drizzle-orm';
 
 import s, { DBProjectLlmConfig, NewProjectLlmConfig } from '../db/abstractSchema';
 import { db } from '../db/db';
-import { LlmProvider } from '../types/llm';
 import { getDefaultEnvProvider, getDefaultModelId } from '../utils/llm';
 
 export const getProjectLlmConfigs = async (projectId: string): Promise<DBProjectLlmConfig[]> => {
@@ -30,8 +30,8 @@ export const upsertProjectLlmConfig = async (
 		const [updated] = await db
 			.update(s.projectLlmConfig)
 			.set({
-				// Only update apiKey if a new one is provided
 				...(config.apiKey !== null && { apiKey: config.apiKey }),
+				...(config.credentials !== undefined && { credentials: config.credentials }),
 				enabledModels: config.enabledModels,
 				baseUrl: config.baseUrl,
 			})

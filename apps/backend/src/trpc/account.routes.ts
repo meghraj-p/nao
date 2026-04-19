@@ -5,9 +5,10 @@ import { z } from 'zod/v4';
 import * as accountQueries from '../queries/account.queries';
 import * as projectQueries from '../queries/project.queries';
 import * as userQueries from '../queries/user.queries';
-import { emailService } from '../services/email.service';
+import { emailService } from '../services/email';
+import { buildResetPasswordEmail } from '../utils/email-builders';
 import { regexPassword } from '../utils/utils';
-import { adminProtectedProcedure, projectProtectedProcedure } from './trpc';
+import { adminProtectedProcedure, protectedProcedure } from './trpc';
 
 export const accountRoutes = {
 	resetPassword: adminProtectedProcedure
@@ -25,7 +26,7 @@ export const accountRoutes = {
 				});
 			}
 
-			const userProject = await projectQueries.checkUserHasProject(input.userId);
+			const userProject = await projectQueries.getProjectByUserId(input.userId);
 
 			if (ctx.project.id !== userProject?.id) {
 				throw new TRPCError({
@@ -42,17 +43,12 @@ export const accountRoutes = {
 			const user = await userQueries.get({ id: input.userId });
 
 			if (user) {
-				await emailService.safeSendEmail({
-					user,
-					projectName: userProject?.name,
-					type: 'resetPassword',
-					temporaryPassword: password,
-				});
+				await emailService.sendEmail(user.email, buildResetPasswordEmail(user, userProject?.name, password));
 			}
 
 			return { password };
 		}),
-	modifyPassword: projectProtectedProcedure
+	modifyPassword: protectedProcedure
 		.input(
 			z.object({
 				newPassword: z.string(),

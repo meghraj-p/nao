@@ -5,7 +5,7 @@ from typing import Annotated
 
 from cyclopts import Parameter
 
-from nao_core.config import NaoConfig
+from nao_core.config import NaoConfig, NaoConfigError
 from nao_core.config.exceptions import InitError
 from nao_core.tracking import track_command
 from nao_core.ui import UI, ask_confirm, ask_text
@@ -39,16 +39,23 @@ def setup_project_name(force: bool = False) -> tuple[str, Path, NaoConfig | None
     config_file = current_dir / "nao_config.yaml"
 
     if config_file.exists():
-        # Load existing config to get project name
-        existing_config = NaoConfig.try_load(current_dir)
-        if existing_config:
-            UI.title("Found existing nao_config.yaml")
-            UI.print(f"[dim]Project: {existing_config.project_name}[/dim]\n")
+        try:
+            existing_config = NaoConfig.try_load(current_dir, raise_on_error=True)
+        except NaoConfigError as e:
+            raise InitError(
+                f"Found invalid nao_config.yaml.\n{e}\n\nFix the configuration file and rerun `nao init`."
+            ) from e
 
-            if force or ask_confirm("Update this project configuration?", default=True):
-                return existing_config.project_name, current_dir, existing_config
-            else:
-                raise InitError("Initialization cancelled.")
+        if not existing_config:
+            raise InitError("Failed to load existing nao_config.yaml.")
+
+        UI.title("Found existing nao_config.yaml")
+        UI.print(f"[dim]Project: {existing_config.project_name}[/dim]\n")
+
+        if force or ask_confirm("Update this project configuration?", default=True):
+            return existing_config.project_name, current_dir, existing_config
+
+        raise InitError("Initialization cancelled.")
 
     # Normal flow: prompt for project name
     project_name = ask_text("Enter your project name:", required_field=True)
@@ -80,11 +87,13 @@ def create_empty_structure(project_path: Path) -> tuple[list[str], list[CreatedF
         "repos",
         "agent/tools",
         "agent/mcps",
+        "agent/skills",
+        "tests",
     ]
 
     FILES = [
         CreatedFile(path=Path("RULES.md"), content=None),
-        CreatedFile(path=Path(".naoignore"), content="templates/\n*.j2\n"),
+        CreatedFile(path=Path(".naoignore"), content="templates/\n*.j2\ntests/\n"),
     ]
 
     created_folders = []
@@ -103,6 +112,28 @@ def create_empty_structure(project_path: Path) -> tuple[list[str], list[CreatedF
         created_files.append(file)
 
     return created_folders, created_files
+
+
+def _install_with_progress(extras: list[str]) -> bool:
+    """Run the extras install with a Rich spinner. Returns True on success."""
+    from rich.console import Console
+    from rich.status import Status
+
+    from nao_core.deps import install_extras
+
+    console = Console()
+
+    with Status("[bold cyan]Installing dependencies…[/bold cyan]", console=console, spinner="dots"):
+        success = install_extras(extras)
+
+    if success:
+        UI.success("Dependencies installed successfully.")
+        return True
+
+    extras_str = ",".join(extras)
+    UI.error("Automatic installation failed.")
+    UI.print(f"Install manually with: [bold cyan]pip install 'nao-core[{extras_str}]'[/bold cyan]")
+    return False
 
 
 @track_command("init")
@@ -136,13 +167,35 @@ def init(
             UI.success(f"Created project [cyan]{project_name}[/cyan]")
         UI.success(f"Saved [dim]{project_path / 'nao_config.yaml'}[/dim]")
         UI.print()
+
+        # Install missing optional dependencies inline
+        from nao_core.deps import get_missing_extras
+
+        missing = get_missing_extras(config)
+        deps_ready = not missing
+        if missing:
+            extras_label = ", ".join(missing)
+            UI.title("Installing provider dependencies")
+            UI.print(f"[dim]Extras: {extras_label}[/dim]\n")
+
+            if ask_confirm("Install the required provider dependencies now?", default=True):
+                UI.print()
+                deps_ready = _install_with_progress(missing)
+            else:
+                extras_str = ",".join(missing)
+                UI.print()
+                UI.warn("Skipped dependency installation.")
+                UI.print(
+                    f"You can install them later with: [bold cyan]pip install 'nao-core[{extras_str}]'[/bold cyan]"
+                )
+
+        UI.print()
         UI.print("[bold green]Done![/bold green] Your nao project is ready. 🎉")
 
         is_subfolder = project_path.resolve() != Path.cwd().resolve()
 
         has_connections = config.databases or config.llm
-        if has_connections:
-            # Change directory for the debug command to run in the right context
+        if has_connections and deps_ready:
             os.chdir(project_path)
             from nao_core.commands.debug import debug
 
@@ -170,3 +223,4 @@ def init(
 
     except InitError as e:
         UI.error(str(e))
+        raise SystemExit(1) from e

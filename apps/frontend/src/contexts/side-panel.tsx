@@ -1,24 +1,53 @@
-import { createContext, useContext } from 'react';
-import { useMemoObject } from '@/hooks/useMemoObject';
+import { createContext, useContext, useMemo } from 'react';
 
 interface SidePanelContext {
-	content: React.ReactNode;
-	open: (content: React.ReactNode) => void;
+	isVisible: boolean;
+	currentStorySlug: string | null;
+	chatId: string | null;
+	shareId: string | null;
+	isReadonlyMode: boolean;
+	open: (content: React.ReactNode, storySlug?: string) => void;
+	close: () => void;
 }
 
-const SidePanelContext = createContext<{
-	content: React.ReactNode;
-	open: (content: React.ReactNode) => void;
-} | null>(null);
+const SidePanelContext = createContext<SidePanelContext | null>(null);
 
-export const useSidePanel = () => {
-	const context = useContext(SidePanelContext);
-	if (!context) {
-		throw new Error('useSidePanel must be used within a SidePanelProvider');
-	}
-	return context;
+const noopSidePanel: SidePanelContext = {
+	isVisible: false,
+	currentStorySlug: null,
+	chatId: null,
+	shareId: null,
+	isReadonlyMode: false,
+	open: () => {},
+	close: () => {},
 };
 
-export const SidePanelProvider = ({ children, value }: { children: React.ReactNode; value: SidePanelContext }) => {
-	return <SidePanelContext.Provider value={useMemoObject(value)}>{children}</SidePanelContext.Provider>;
+export const useSidePanel = () => {
+	return useContext(SidePanelContext) ?? noopSidePanel;
+};
+
+export const SidePanelProvider = ({
+	children,
+	isVisible,
+	currentStorySlug,
+	chatId,
+	shareId = null,
+	isReadonlyMode = false,
+	open,
+	close,
+}: {
+	children: React.ReactNode;
+	isVisible: boolean;
+	currentStorySlug: string | null;
+	chatId: string | null;
+	shareId?: string | null;
+	isReadonlyMode?: boolean;
+	open: (content: React.ReactNode, storySlug?: string) => void;
+	close: () => void;
+}) => {
+	const value = useMemo(
+		() => ({ isVisible, currentStorySlug, chatId, shareId, isReadonlyMode, open, close }),
+		[isVisible, currentStorySlug, chatId, shareId, isReadonlyMode, open, close],
+	);
+	return <SidePanelContext.Provider value={value}>{children}</SidePanelContext.Provider>;
 };

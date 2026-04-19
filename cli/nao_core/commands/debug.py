@@ -1,9 +1,10 @@
+import os
 from typing import Tuple
 
 from rich.console import Console
 from rich.table import Table
 
-from nao_core.config import NaoConfig
+from nao_core.config import NaoConfig, resolve_project_path
 from nao_core.tracking import track_command
 
 console = Console()
@@ -17,27 +18,87 @@ def _count(models) -> int:
         return sum(1 for _ in models)
 
 
-def _check_available_models(provider: str, api_key: str) -> Tuple[bool, str]:
+def _check_available_models(llm_config) -> Tuple[bool, str]:
+    from nao_core.deps import require_dependency
+
+    provider = llm_config.provider.value
+    api_key = llm_config.api_key
+
     if provider == "openai":
+        require_dependency("openai", "openai", "for OpenAI LLM provider")
         from openai import OpenAI
 
         client = OpenAI(api_key=api_key)
         models = client.models.list()
     elif provider == "anthropic":
+        require_dependency("anthropic", "anthropic", "for Anthropic LLM provider")
         from anthropic import Anthropic
 
         client = Anthropic(api_key=api_key)
         models = client.models.list()
     elif provider == "gemini":
+        require_dependency("google.genai", "gemini", "for Google Gemini LLM provider")
         from google import genai
 
         client = genai.Client(api_key=api_key)
         models = client.models.list()
     elif provider == "mistral":
+        require_dependency("mistralai", "mistral", "for Mistral LLM provider")
         from mistralai import Mistral
 
         client = Mistral(api_key=api_key)
         models = client.models.list()
+    elif provider == "openrouter":
+        require_dependency("openai", "openai", "for OpenRouter LLM provider")
+        from openai import OpenAI
+
+        client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)
+        models = client.models.list()
+    elif provider == "ollama":
+        require_dependency("ollama", "ollama", "for Ollama LLM provider")
+        import ollama
+
+        models = ollama.list().models
+    elif provider == "bedrock":
+        region = llm_config.aws_region or os.environ.get("AWS_REGION", "us-east-1")
+        if api_key:
+            return True, f"Bearer token configured (region: {region})"
+
+        import boto3
+
+        profile = llm_config.aws_profile or os.environ.get("AWS_PROFILE")
+        session = boto3.Session(profile_name=profile, region_name=region)
+        client = session.client("bedrock")
+        response = client.list_foundation_models()
+        models = response.get("modelSummaries", [])
+    elif provider == "vertex":
+        project = llm_config.gcp_project
+        location = llm_config.gcp_location or "us-east5"
+        if not project:
+            return False, "gcp_project is not set in config"
+
+        if llm_config.service_account_json:
+            import json
+
+            from google.oauth2 import service_account
+
+            info = json.loads(llm_config.service_account_json)
+            credentials = service_account.Credentials.from_service_account_info(
+                info, scopes=["https://www.googleapis.com/auth/cloud-platform"]
+            )
+            return True, f"Service account configured (project: {project}, location: {location})"
+        if llm_config.key_file:
+            from google.oauth2 import service_account
+
+            credentials = service_account.Credentials.from_service_account_file(
+                llm_config.key_file, scopes=["https://www.googleapis.com/auth/cloud-platform"]
+            )
+            return True, f"Key file configured (project: {project}, location: {location})"
+
+        import google.auth
+
+        credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+        return True, f"ADC configured (project: {project}, location: {location})"
     else:
         return False, f"Unknown provider: {provider}"
 
@@ -51,10 +112,19 @@ def check_llm_connection(llm_config) -> tuple[bool, str]:
     Returns:
             Tuple of (success, message)
     """
+    if llm_config.requires_api_key and not llm_config.api_key:
+        provider = llm_config.provider.value
+        return False, f"API key is empty or not set (required for {provider})"
+
     try:
-        return _check_available_models(llm_config.provider.value, llm_config.api_key)
+        return _check_available_models(llm_config)
     except Exception as e:
-        return False, str(e)
+        error_msg = str(e)
+        if "Unauthorized" in error_msg or "401" in error_msg:
+            return False, f"Authentication failed: {error_msg} (check if API key is valid)"
+        if "invalid_api_key" in error_msg.lower():
+            return False, f"Invalid API key: {error_msg}"
+        return False, error_msg
 
 
 @track_command("debug")
@@ -67,7 +137,7 @@ def debug():
     console.print("\n[bold cyan]🔍 nao debug - Testing connections...[/bold cyan]\n")
 
     # Load config
-    config = NaoConfig.try_load(exit_on_error=True)
+    config = NaoConfig.try_load(resolve_project_path(), exit_on_error=True)
     assert config is not None  # Help type checker after exit_on_error=True
 
     console.print(f"[bold green]✓[/bold green] Loaded config: [cyan]{config.project_name}[/cyan]\n")
@@ -95,13 +165,11 @@ def debug():
                 )
             else:
                 console.print("[bold red]✗[/bold red]")
-                # Truncate long error messages
-                short_msg = message[:80] + "..." if len(message) > 80 else message
                 db_table.add_row(
                     db.name,
                     db.type,
                     "[red]Failed[/red]",
-                    short_msg,
+                    f"[red]{message}[/red]",
                 )
 
         console.print()
@@ -131,11 +199,10 @@ def debug():
             )
         else:
             console.print("[bold red]✗[/bold red]")
-            short_msg = message[:80] + "..." if len(message) > 80 else message
             llm_table.add_row(
                 config.llm.provider.value,
                 "[red]Failed[/red]",
-                short_msg,
+                f"[red]{message}[/red]",
             )
 
         console.print()

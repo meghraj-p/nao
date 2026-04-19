@@ -1,85 +1,82 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import {
-	BarChart,
-	Bar,
-	AreaChart,
-	Area,
-	PieChart,
-	Pie,
-	ScatterChart,
-	Scatter,
-	RadarChart,
-	Radar,
-	RadialBarChart,
-	RadialBar,
-	XAxis,
-	YAxis,
-	CartesianGrid,
-	PolarGrid,
-	PolarAngleAxis,
-	PolarRadiusAxis,
-	LabelList,
-} from 'recharts';
-import { useAgentContext } from '../../contexts/agent.provider';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { buildChart, labelize } from '@nao/shared';
+import { Download, FilePlus } from 'lucide-react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useParams } from '@tanstack/react-router';
+import { useOptionalAgentContext } from '../../contexts/agent.provider';
 import { ChartContainer, ChartTooltip, ChartTooltipContent, ChartLegend, ChartLegendContent } from '../ui/chart';
 import { TextShimmer } from '../ui/text-shimmer';
 import { Skeleton } from '../ui/skeleton';
+import { Button } from '../ui/button';
 import { ToolCallWrapper } from './tool-call-wrapper';
 import { ChartRangeSelector } from './display-chart-range-selector';
 import type { ToolCallComponentProps } from '.';
-import type { CategoricalChartProps } from 'recharts/types/chart/generateCategoricalChart';
 import type { ChartConfig } from '../ui/chart';
 import type { displayChart } from '@nao/shared/tools';
+import type { UIMessage } from '@nao/backend/chat';
 import type { DateRange } from '@/lib/charts.utils';
-import { labelize, filterByDateRange, DATE_RANGE_OPTIONS, toKey } from '@/lib/charts.utils';
+import { filterByDateRange, sortByDateKey, DATE_RANGE_OPTIONS, toKey } from '@/lib/charts.utils';
+import { findStoryIds } from '@/lib/story.utils';
+import { useSidePanel } from '@/contexts/side-panel';
+import { StoryViewer } from '@/components/side-panel/story-viewer';
+import { trpc } from '@/main';
 
 const Colors = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)', 'var(--chart-5)'];
+const EMPTY_MESSAGES: UIMessage[] = [];
+
+const escapeDoubleQuotedAttr = (value: string) => value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+const escapeSingleQuotedAttr = (value: string) => value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 
 function getSeriesLabel(s: displayChart.SeriesConfig, columnLabels?: Record<string, string>): string {
 	return columnLabels?.[s.data_key] ?? s.label ?? labelize(s.data_key);
 }
 
-function ScatterChartTooltipContent({
-	active,
-	payload,
-	labelKey,
-	xAxisKey,
-	series,
-	columnLabels,
-}: {
-	active?: boolean;
-	payload?: Array<{ payload?: Record<string, unknown>; dataKey?: string | number; value?: unknown }>;
-	labelKey: string;
-	xAxisKey: string;
-	series: displayChart.SeriesConfig[];
-	columnLabels?: Record<string, string>;
-}) {
-	const first = payload?.[0];
-	if (!active || !first?.payload) {
-		return null;
-	}
-	const row = first.payload;
-	const header = row[labelKey] ?? row[xAxisKey];
-	return (
-		<div className='border-border/50 bg-background min-w-32 rounded-lg border px-2.5 py-1.5 text-xs shadow-xl'>
-			<div className='mb-1.5 font-medium'>{labelize(header)}</div>
-			<div className='grid gap-1'>
-				{series.map((s) => (
-					<div key={s.data_key} className='flex justify-between gap-4'>
-						<span className='text-muted-foreground'>{getSeriesLabel(s, columnLabels)}</span>
-						<span className='font-mono tabular-nums'>{String(row[s.data_key] ?? '')}</span>
-					</div>
-				))}
-			</div>
-		</div>
-	);
-}
-
-export const DisplayChartToolCall = ({ toolPart }: ToolCallComponentProps<'display_chart'>) => {
-	const { messages } = useAgentContext();
-	const config = toolPart.state !== 'input-streaming' ? toolPart.input : undefined;
-	const output = toolPart.output;
+export const DisplayChartToolCall = ({
+	toolPart: { state, input, output, toolCallId },
+}: ToolCallComponentProps<'display_chart'>) => {
+	const agent = useOptionalAgentContext();
+	const messages = agent?.messages ?? EMPTY_MESSAGES;
+	const { chatId } = useParams({ strict: false });
+	const queryClient = useQueryClient();
+	const { open: openSidePanel, currentStorySlug, isVisible } = useSidePanel();
+	const config = state !== 'input-streaming' ? input : undefined;
 	const [dataRange, setDataRange] = useState<DateRange>('all');
+	const storyIds = useMemo(() => findStoryIds(messages), [messages]);
+	const normalSize = useMemo(() => (document.querySelector('[data-selection-container]') ? true : false), []);
+
+	const addToStoryMutation = useMutation(
+		trpc.story.createVersion.mutationOptions({
+			onSuccess: (_data, variables) => {
+				queryClient.invalidateQueries({
+					queryKey: trpc.story.listVersions.queryKey({
+						chatId: variables.chatId,
+						storySlug: variables.storySlug,
+					}),
+				});
+				queryClient.invalidateQueries({ queryKey: trpc.story.listAll.queryKey() });
+			},
+		}),
+	);
+
+	const [isDownloading, setIsDownloading] = useState(false);
+
+	const handleDownload = async () => {
+		if (!config) {
+			return;
+		}
+		setIsDownloading(true);
+		try {
+			const image = await queryClient.fetchQuery(trpc.chart.download.queryOptions({ toolCallId }));
+			const link = document.createElement('a');
+			link.download = `${config.title || 'chart'}.png`;
+			link.href = `data:image/png;base64,${image}`;
+			link.click();
+		} catch (err) {
+			console.error('Error downloading chart image:', err);
+		} finally {
+			setIsDownloading(false);
+		}
+	};
 
 	const sourceData = useMemo(() => {
 		if (!config?.query_id) {
@@ -100,37 +97,12 @@ export const DisplayChartToolCall = ({ toolPart }: ToolCallComponentProps<'displ
 		if (!sourceData?.data || !config) {
 			return [];
 		}
-		return filterByDateRange(sourceData.data, config.x_axis_key, dataRange);
+		if (config.x_axis_type !== 'date') {
+			return sourceData.data;
+		}
+		const sorted = sortByDateKey(sourceData.data, config.x_axis_key);
+		return filterByDateRange(sorted, config.x_axis_key, dataRange);
 	}, [sourceData?.data, config, dataRange]);
-
-	const chartContent = useMemo(
-		() =>
-			config && sourceData?.data?.length && config.series.length > 0 ? (
-				<div className='flex flex-col items-center my-4 gap-2 aspect-3/2'>
-					<span className='text-sm font-medium'>{config.title}</span>
-					{config.chart_type !== 'pie' && config.x_axis_type === 'date' && (
-						<div className='flex w-full justify-end items-center'>
-							<ChartRangeSelector
-								options={DATE_RANGE_OPTIONS}
-								selectedRange={dataRange}
-								onRangeSelected={(range) => setDataRange(range)}
-							/>
-						</div>
-					)}
-
-					<ChartDisplay
-						data={filteredData}
-						chartType={config.chart_type}
-						xAxisKey={config.x_axis_key}
-						series={config.series}
-						xAxisType={config.x_axis_type === 'number' ? 'number' : 'category'}
-						labelKey={config.chart_type === 'scatter' ? (config.label_key ?? config.x_axis_key) : undefined}
-						columnLabels={config.column_labels}
-					/>
-				</div>
-			) : null,
-		[config, filteredData, dataRange, sourceData?.data?.length],
-	);
 
 	if (output && output.error) {
 		return (
@@ -175,7 +147,89 @@ export const DisplayChartToolCall = ({ toolPart }: ToolCallComponentProps<'displ
 		);
 	}
 
-	return chartContent;
+	const handleAddToStory = async () => {
+		const targetId = isVisible && currentStorySlug ? currentStorySlug : storyIds[storyIds.length - 1];
+		if (!targetId || !config || !chatId) {
+			return;
+		}
+
+		const data = await queryClient.fetchQuery(
+			trpc.story.listVersions.queryOptions({ chatId, storySlug: targetId }),
+		);
+		const latest = data.versions.at(-1);
+		if (!latest) {
+			return;
+		}
+
+		const seriesJson = JSON.stringify(config.series);
+		const chartBlock = `<chart query_id="${escapeDoubleQuotedAttr(config.query_id)}" chart_type="${escapeDoubleQuotedAttr(config.chart_type)}" x_axis_key="${escapeDoubleQuotedAttr(config.x_axis_key)}" x_axis_type="${escapeDoubleQuotedAttr(config.x_axis_type ?? '')}" series='${escapeSingleQuotedAttr(seriesJson)}' title="${escapeDoubleQuotedAttr(config.title ?? '')}" />`;
+		const newCode = latest.code.trimEnd() + '\n\n' + chartBlock;
+
+		addToStoryMutation.mutate({
+			chatId,
+			storySlug: targetId,
+			title: data.title,
+			code: newCode,
+			action: 'update',
+		});
+
+		if (!isVisible) {
+			openSidePanel(<StoryViewer chatId={chatId} storySlug={targetId} />, targetId);
+		}
+	};
+
+	return (
+		<div
+			className={`flex flex-col items-center my-4 gap-2 ${config.chart_type !== 'kpi_card' && !normalSize ? 'aspect-3/2' : ''}`}
+		>
+			<div className='flex w-full items-center justify-between'>
+				{config.chart_type != 'kpi_card' ? (
+					<span className='text-sm font-medium flex-1'>{config.title}</span>
+				) : (
+					<div></div>
+				)}
+				{storyIds.length > 0 && (
+					<Button variant='ghost-muted' size='sm' onClick={handleAddToStory} className='gap-1'>
+						<FilePlus className='size-3' />
+						<span className='text-xs'>Add to story</span>
+					</Button>
+				)}
+			</div>
+			<div className='relative w-full flex justify-end'>
+				<div className='flex items-center gap-1'>
+					{config.chart_type !== 'pie' && config.x_axis_type === 'date' && (
+						<ChartRangeSelector
+							options={DATE_RANGE_OPTIONS}
+							selectedRange={dataRange}
+							onRangeSelected={(range) => setDataRange(range)}
+						/>
+					)}
+					{config.chart_type != 'kpi_card' && (
+						<Button
+							variant='ghost-muted'
+							size='icon-xs'
+							onClick={handleDownload}
+							disabled={isDownloading}
+							title='Download as PNG'
+						>
+							<Download className='size-3.5' />
+						</Button>
+					)}
+				</div>
+			</div>
+
+			<ChartDisplay
+				data={filteredData}
+				chartType={config.chart_type}
+				xAxisKey={config.x_axis_key}
+				series={config.series}
+				xAxisType={config.x_axis_type === 'number' ? 'number' : 'category'}
+				labelKey={config.chart_type === 'scatter' ? (config.label_key ?? config.x_axis_key) : undefined}
+				columnLabels={config.column_labels}
+				title={config.title}
+			/>
+		</div>
+	);
 };
 
 export interface ChartDisplayProps {
@@ -191,7 +245,7 @@ export interface ChartDisplayProps {
 	columnLabels?: Record<string, string>;
 }
 
-export const ChartDisplay = React.memo(function ChartDisplay({
+export const ChartDisplay = memo(function ChartDisplay({
 	data,
 	chartType,
 	xAxisKey,
@@ -200,14 +254,12 @@ export const ChartDisplay = React.memo(function ChartDisplay({
 	series,
 	title,
 	showGrid = true,
-	labelKey,
 	columnLabels,
 }: ChartDisplayProps) {
 	const { visibleSeries, hiddenSeriesKeys, handleToggleSeriesVisibility } = useSeriesVisibility(series);
 
-	/** Recharts config for series labels and colors */
 	const chartConfig = useMemo((): ChartConfig => {
-		if (chartType === 'pie' || chartType === 'radial_bar') {
+		if (chartType === 'pie') {
 			const values = new Set(data.map((item) => String(item[xAxisKey])));
 			return [...values].reduce(
 				(acc, v, index) => {
@@ -234,251 +286,79 @@ export const ChartDisplay = React.memo(function ChartDisplay({
 		}, {} as ChartConfig);
 	}, [series, xAxisKey, data, chartType, columnLabels]);
 
-	const renderChart = (opts: {
-		chart: CategoricalChartProps;
-		tooltip: React.ComponentProps<typeof ChartTooltip>;
-	}) => {
-		if (chartType === 'bar' || chartType === 'stacked_bar' || chartType === 'line') {
-			const Chart = chartType === 'bar' || chartType === 'stacked_bar' ? BarChart : AreaChart;
-			const legendPayload = series.map((s, idx) => ({
+	const colorFor = useMemo(
+		() =>
+			chartType === 'pie'
+				? (value: string, _i: number) => `var(--color-${toKey(value)})`
+				: (dataKey: string, _i: number) => `var(--color-${dataKey})`,
+		[chartType],
+	);
+
+	const legendPayload = useMemo(
+		() =>
+			series.map((s, idx) => ({
 				value: getSeriesLabel(s, columnLabels),
 				dataKey: s.data_key,
 				color: s.color || Colors[idx % Colors.length],
 				isHidden: hiddenSeriesKeys.has(s.data_key),
-			}));
+			})),
+		[series, hiddenSeriesKeys, columnLabels],
+	);
 
-			return (
-				<Chart data={data} accessibilityLayer {...opts}>
-					<defs>
-						{visibleSeries.map((s) => (
-							<linearGradient key={s.data_key} id={s.data_key} x1='0' y1='0' x2='0' y2='1'>
-								<stop offset='0%' stopColor={`var(--color-${s.data_key})`} stopOpacity={0.25} />
-								<stop offset='100%' stopColor={`var(--color-${s.data_key})`} stopOpacity={0} />
-							</linearGradient>
-						))}
-					</defs>
-
-					{showGrid && <CartesianGrid horizontal={true} vertical={false} strokeDasharray='3 3' />}
-
+	const chartElement = useMemo(
+		() =>
+			buildChart({
+				data,
+				chartType,
+				xAxisKey,
+				xAxisType,
+				series: visibleSeries,
+				colorFor,
+				labelFormatter: xAxisLabelFormatter,
+				showGrid,
+				margin: { top: 0, right: 0, bottom: 0, left: 0 },
+				children: [
 					<ChartTooltip
-						{...opts.tooltip}
+						key='tooltip'
+						animationDuration={150}
+						animationEasing='linear'
+						allowEscapeViewBox={{ y: true, x: false }}
 						content={<ChartTooltipContent labelFormatter={(value) => labelize(value)} />}
-					/>
-
-					<YAxis tickLine={false} axisLine={false} minTickGap={12} />
-					<XAxis
-						dataKey={xAxisKey}
-						type={xAxisType}
-						domain={['dataMin', 'dataMax']}
-						tickLine={true}
-						tickMargin={10}
-						axisLine={false}
-						minTickGap={12}
-						tickFormatter={(value) => xAxisLabelFormatter?.(value) || labelize(value)}
-					/>
-
-					{chartType === 'bar'
-						? visibleSeries.map((s) => (
-								<Bar
-									key={s.data_key}
-									dataKey={s.data_key}
-									fill={`var(--color-${s.data_key})`}
-									radius={4}
-									isAnimationActive={false}
-								/>
-							))
-						: chartType === 'stacked_bar'
-							? visibleSeries.map((s, idx) => (
-									<Bar
-										key={s.data_key}
-										dataKey={s.data_key}
-										stackId='stack'
-										fill={`var(--color-${s.data_key})`}
-										radius={idx === visibleSeries.length - 1 ? [4, 4, 0, 0] : 0}
-										isAnimationActive={false}
-									/>
-								))
-							: visibleSeries.map((s) => (
-									<Area
-										key={s.data_key}
-										dataKey={s.data_key}
-										type='monotone'
-										stroke={`var(--color-${s.data_key})`}
-										fill={`url(#${s.data_key})`}
-										isAnimationActive={false}
-									/>
-								))}
-
-					<ChartLegend
-						payload={legendPayload}
-						content={<ChartLegendContent onItemClick={handleToggleSeriesVisibility} />}
-					/>
-				</Chart>
-			);
-		}
-
-		if (chartType === 'scatter') {
-			const scatterLabelKey = labelKey ?? xAxisKey;
-			const legendPayload = series.map((s, idx) => ({
-				value: getSeriesLabel(s, columnLabels),
-				dataKey: s.data_key,
-				color: s.color || Colors[idx % Colors.length],
-				isHidden: hiddenSeriesKeys.has(s.data_key),
-			}));
-
-			return (
-				<ScatterChart data={data} accessibilityLayer {...opts.chart}>
-					{showGrid && <CartesianGrid strokeDasharray='3 3' />}
-					<XAxis
-						dataKey={xAxisKey}
-						type={xAxisType}
-						tickLine={true}
-						tickMargin={10}
-						axisLine={false}
-						minTickGap={12}
-						tickFormatter={(value) => xAxisLabelFormatter?.(value) || labelize(value)}
-					/>
-					<YAxis type='number' tickLine={false} axisLine={false} minTickGap={12} />
-					<ChartTooltip
-						{...opts.tooltip}
-						content={({ active, payload }) => (
-							<ScatterChartTooltipContent
-								active={active}
-								payload={payload}
-								labelKey={scatterLabelKey}
-								xAxisKey={xAxisKey}
-								series={visibleSeries}
-								columnLabels={columnLabels}
-							/>
-						)}
-					/>
-					{visibleSeries.map((s) => (
-						<Scatter
-							key={s.data_key}
-							dataKey={s.data_key}
-							fill={`var(--color-${s.data_key})`}
-							name={getSeriesLabel(s, columnLabels)}
-							isAnimationActive={false}
-						>
-							<LabelList
-								dataKey={scatterLabelKey}
-								position='top'
-								formatter={(v: unknown) => (v != null ? labelize(v) : '')}
-								style={{ pointerEvents: 'none' }}
-							/>
-						</Scatter>
-					))}
-					<ChartLegend
-						payload={legendPayload}
-						content={<ChartLegendContent onItemClick={handleToggleSeriesVisibility} />}
-					/>
-				</ScatterChart>
-			);
-		}
-
-		if (chartType === 'radar') {
-			const legendPayload = series.map((s, idx) => ({
-				value: getSeriesLabel(s, columnLabels),
-				dataKey: s.data_key,
-				color: s.color || Colors[idx % Colors.length],
-				isHidden: hiddenSeriesKeys.has(s.data_key),
-			}));
-
-			return (
-				<RadarChart data={data} cx='50%' cy='50%' outerRadius='70%' accessibilityLayer>
-					<PolarGrid />
-					<PolarAngleAxis dataKey={xAxisKey} tickFormatter={(value) => labelize(value)} />
-					<PolarRadiusAxis />
-					<ChartTooltip
-						{...opts.tooltip}
-						content={<ChartTooltipContent labelFormatter={(value) => labelize(value)} />}
-					/>
-					{visibleSeries.map((s) => (
-						<Radar
-							key={s.data_key}
-							dataKey={s.data_key}
-							stroke={`var(--color-${s.data_key})`}
-							fill={`var(--color-${s.data_key})`}
-							fillOpacity={0.5}
-							name={getSeriesLabel(s, columnLabels)}
-							isAnimationActive={false}
+					/>,
+					chartType !== 'pie' && (
+						<ChartLegend
+							key='legend'
+							payload={legendPayload}
+							content={<ChartLegendContent onItemClick={handleToggleSeriesVisibility} />}
 						/>
-					))}
-					<ChartLegend
-						payload={legendPayload}
-						content={<ChartLegendContent onItemClick={handleToggleSeriesVisibility} />}
-					/>
-				</RadarChart>
-			);
-		}
-
-		if (chartType === 'radial_bar') {
-			const dataKey = series[0].data_key;
-			const dataWithColors = data.map((item) => ({
-				...item,
-				fill: `var(--color-${toKey(String(item[xAxisKey]))})`,
-			}));
-
-			return (
-				<RadialBarChart
-					data={dataWithColors}
-					cx='50%'
-					cy='50%'
-					innerRadius='20%'
-					outerRadius='70%'
-					accessibilityLayer
-				>
-					<PolarAngleAxis dataKey={xAxisKey} tickFormatter={(value) => labelize(value)} />
-					<RadialBar dataKey={dataKey} background />
-					<ChartTooltip {...opts.tooltip} content={<ChartTooltipContent />} />
-				</RadialBarChart>
-			);
-		}
-
-		const dataKey = series[0].data_key;
-		const dataWithColors = data.map((item) => ({
-			...item,
-			fill: `var(--color-${toKey(String(item[xAxisKey]))})`,
-		}));
-		return (
-			<PieChart accessibilityLayer>
-				<ChartTooltip {...opts.tooltip} content={<ChartTooltipContent />} />
-				<Pie
-					data={dataWithColors}
-					dataKey={dataKey}
-					nameKey={xAxisKey}
-					label={({ name, value }) => `${labelize(name)}: ${value}`}
-					labelLine={false}
-				/>
-			</PieChart>
-		);
-	};
-
-	const chartContent = renderChart({
-		chart: {
-			margin: {
-				top: 0,
-				right: 0,
-				bottom: 0,
-				left: -18,
-			},
-		},
-		tooltip: {
-			animationDuration: 150,
-			animationEasing: 'linear',
-			allowEscapeViewBox: {
-				y: true,
-				x: false,
-			},
-		},
-	});
+					),
+				],
+				title,
+			}),
+		[
+			data,
+			chartType,
+			xAxisKey,
+			xAxisType,
+			visibleSeries,
+			colorFor,
+			xAxisLabelFormatter,
+			showGrid,
+			legendPayload,
+			handleToggleSeriesVisibility,
+			title,
+		],
+	);
 
 	return (
 		<div className='flex flex-col items-center gap-2 w-full'>
-			{title && <span className='text-sm font-medium'>{title}</span>}
-			<ChartContainer config={chartConfig} className='w-full'>
-				{chartContent}
-			</ChartContainer>
+			{chartType === 'kpi_card' ? (
+				chartElement
+			) : (
+				<ChartContainer config={chartConfig} className='w-full'>
+					{chartElement}
+				</ChartContainer>
+			)}
 		</div>
 	);
 });
@@ -502,7 +382,7 @@ const useSeriesVisibility = (series: displayChart.SeriesConfig[]) => {
 		[series, hiddenSeriesKeys],
 	);
 
-	const handleToggleSeriesVisibility = (dataKey: string) => {
+	const handleToggleSeriesVisibility = useCallback((dataKey: string) => {
 		setHiddenSeriesKeys((prev) => {
 			const copy = new Set(prev);
 			if (copy.has(dataKey)) {
@@ -512,7 +392,7 @@ const useSeriesVisibility = (series: displayChart.SeriesConfig[]) => {
 			}
 			return copy;
 		});
-	};
+	}, []);
 
 	return {
 		visibleSeries,

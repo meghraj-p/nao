@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import dotenv from 'dotenv';
-import { z } from 'zod';
+import { z } from 'zod/v4';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
@@ -24,13 +24,27 @@ const envSchema = z.object({
 
 	BETTER_AUTH_URL: z.url({ message: 'BETTER_AUTH_URL must be a valid URL' }).default('http://localhost:5005/'),
 	BETTER_AUTH_SECRET: z.string().min(20).default(crypto.randomBytes(32).toString('hex')),
+	REDIS_URL: z
+		.string()
+		.optional()
+		.transform((val) => val?.trim() || undefined),
 
 	GOOGLE_CLIENT_ID: z.string().optional(),
 	GOOGLE_CLIENT_SECRET: z.string().optional(),
 	GOOGLE_AUTH_DOMAINS: z.string().optional(),
 
-	SLACK_BOT_TOKEN: z.string().optional(),
-	SLACK_SIGNING_SECRET: z.string().optional(),
+	GITHUB_CLIENT_ID: z.string().optional(),
+	GITHUB_CLIENT_SECRET: z.string().optional(),
+	GITHUB_ALLOWED_USERS: z.string().optional(),
+	CLOUD_GITHUB_CLIENT_ID: z.string().optional(),
+	CLOUD_GITHUB_CLIENT_SECRET: z.string().optional(),
+	DEFAULT_USER_ROLE: z.enum(['admin', 'user']).default('user'),
+
+	SMTP_PASSWORD: z.string().optional(),
+	SMTP_HOST: z.string().optional(),
+	SMTP_PORT: z.string().optional(),
+	SMTP_MAIL_FROM: z.string().optional(),
+	SMTP_SSL: z.enum(['true', 'false']).optional(),
 
 	FASTAPI_PORT: z.coerce.number().default(8005),
 	APP_VERSION: z.string().default('dev'),
@@ -38,6 +52,8 @@ const envSchema = z.object({
 	APP_BUILD_DATE: z.string().default(''),
 
 	NAO_DEFAULT_PROJECT_PATH: z.string().optional(),
+	NAO_MODE: z.enum(['self-hosted', 'cloud']).default('self-hosted'),
+	NAO_PROJECTS_DIR: z.string().default('./projects'),
 	NAO_CORE_VERSION: z.string().optional(),
 
 	POSTHOG_KEY: z.string().optional(),
@@ -58,4 +74,18 @@ if (!result.success) {
 	process.exit(1);
 }
 
+if (result.data.NAO_DEFAULT_PROJECT_PATH && result.data.NAO_MODE === 'cloud') {
+	console.error('NAO_DEFAULT_PROJECT_PATH and NAO_MODE=cloud cannot be set at the same time.');
+	process.exit(1);
+}
+
 export const env = result.data;
+
+export const isCloud = env.NAO_MODE === 'cloud';
+export const isSelfHosted = env.NAO_MODE === 'self-hosted';
+
+export function noProjectMessage(): string {
+	return isCloud
+		? 'No project configured. Create a project or ask your organization admin to add you to one.'
+		: 'No project configured. Set NAO_DEFAULT_PROJECT_PATH environment variable.';
+}

@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '../ui/button';
 import type { ReactNode } from 'react';
-import { isToolSettled } from '@/lib/ai';
 import { cn } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
 import { Expandable } from '@/components/ui/expandable';
@@ -32,11 +31,10 @@ export const ToolCallWrapper = ({
 	defaultExpanded = false,
 	overrideError = false,
 }: ToolCallWrapperProps) => {
-	const { toolPart } = useToolCallContext();
+	const { toolPart, isSettled } = useToolCallContext();
 	const [isExpanded, setIsExpanded] = useState(false);
 	const [isHovering, setIsHovering] = useState(false);
 	const canExpand = Boolean(children || toolPart.errorText || toolPart.output);
-	const isSettled = isToolSettled(toolPart);
 	const hasInitialized = useRef(false);
 
 	const isBordered = !!actions;
@@ -91,7 +89,15 @@ export const ToolCallWrapper = ({
 	const contentToShow = toolPart.errorText && !overrideError ? errorContent : children;
 
 	return (
-		<div onMouseEnter={() => setIsHovering(true)} onMouseLeave={() => setIsHovering(false)}>
+		<div
+			onMouseEnter={() => setIsHovering(true)}
+			onMouseLeave={() => setIsHovering(false)}
+			className={cn(isBordered && '-mx-3')}
+			{...(hasError && {
+				'data-replay-nav': 'tool-error',
+				'data-replay-bordered': isBordered ? 'true' : 'false',
+			})}
+		>
 			<Expandable
 				title={title}
 				badge={badge}
@@ -102,7 +108,6 @@ export const ToolCallWrapper = ({
 				leadingIcon={statusIcon}
 				variant={isBordered ? 'bordered' : 'inline'}
 				trailingContent={actionsContent}
-				className={cn(isBordered && '-mx-3')}
 			>
 				{contentToShow}
 			</Expandable>

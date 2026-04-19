@@ -12,13 +12,17 @@ const buttonVariants = cva(
 		variants: {
 			variant: {
 				default: 'bg-primary text-primary-foreground hover:bg-primary/90',
-				destructive: 'bg-destructive/10 text-destructive hover:bg-destructive/15 dark:bg-destructive/60',
-				'destructive-soft': 'bg-accent/50 text-destructive hover:bg-destructive/10 dark:bg-destructive/60',
+				destructive:
+					'bg-destructive/10 text-destructive hover:bg-destructive/15 dark:bg-destructive/60 dark:text-white',
+				'destructive-soft':
+					'bg-accent/50 text-destructive hover:bg-destructive/10 dark:bg-destructive/60 dark:text-white',
 				outline:
 					'border bg-background hover:bg-accent hover:text-accent-foreground dark:bg-input/30 dark:border-input dark:hover:bg-input/50',
 				secondary: 'bg-secondary text-secondary-foreground hover:bg-secondary/80',
 				'ghost-muted':
 					'hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50 text-muted-foreground',
+				'ghost-no-hover':
+					'text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent',
 				ghost: 'hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50',
 				link: 'text-primary underline-offset-4 hover:underline',
 			},
@@ -27,7 +31,7 @@ const buttonVariants = cva(
 				sm: "h-7 rounded-md gap-2 px-3 [&_svg:not([class*='size-'])]:size-3.5",
 				lg: 'h-10 rounded-md px-6',
 				icon: 'size-9',
-				'icon-xs': 'size-6',
+				'icon-xs': "size-6 [&_svg:not([class*='size-'])]:size-3.5",
 				'icon-sm': "size-7 [&_svg:not([class*='size-'])]:size-3.5",
 				'icon-md': 'size-9',
 				'icon-lg': 'size-10',
@@ -87,8 +91,8 @@ function ButtonConnection({ children }: React.ComponentProps<'button'>) {
 	);
 }
 
-function ChatSendButton({ isRunning, disabled, ...props }: React.ComponentProps<'button'> & { isRunning: boolean }) {
-	disabled = !isRunning && disabled;
+function ChatSendButton({ showStop, disabled, ...props }: React.ComponentProps<'button'> & { showStop: boolean }) {
+	disabled = !showStop && disabled;
 
 	return (
 		<Button
@@ -99,7 +103,7 @@ function ChatSendButton({ isRunning, disabled, ...props }: React.ComponentProps<
 				'rounded-full ml-auto disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100 size-7',
 			)}
 		>
-			{isRunning ? (
+			{showStop ? (
 				<SquareIcon fill='currentColor' stroke='currentColor' className='size-3' />
 			) : (
 				<ArrowUpIcon className='size-4' />

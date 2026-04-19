@@ -2,9 +2,10 @@ import { useQuery } from '@tanstack/react-query';
 import { trpc } from '../main';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { handleGoogleSignIn } from '@/lib/auth-client';
+import { handleGithubSignIn, handleGoogleSignIn } from '@/lib/auth-client';
+import GithubIcon from '@/components/icons/github-icon.svg';
 import GoogleIcon from '@/components/icons/google-icon.svg';
-import NaoLogo from '@/components/icons/nao-logo-greyscale.svg';
+import NaoLogo from '@/components/icons/nao-full-logo.svg';
 
 interface AuthFormProps {
 	form: any;
@@ -12,17 +13,67 @@ interface AuthFormProps {
 	submitText: string;
 	children: React.ReactNode;
 	serverError?: string;
+	displaySocialProviders?: boolean;
+	footer?: React.ReactNode;
 }
 
-export function AuthForm({ form, title, submitText, children, serverError }: AuthFormProps) {
-	const isGoogleSetup = useQuery(trpc.google.isSetup.queryOptions());
+export function AuthForm({
+	form,
+	title,
+	submitText,
+	children,
+	serverError,
+	displaySocialProviders,
+	footer,
+}: AuthFormProps) {
+	const isGoogleSetup = useQuery(trpc.authConfig.google.isSetup.queryOptions());
+	const isGithubSetup = useQuery(trpc.authConfig.github.isSetup.queryOptions());
 
 	return (
 		<div className='mx-auto w-full max-w-md p-8 my-auto'>
-			<div className='flex flex-col items-center mb-8'>
-				<NaoLogo className='w-12 h-12 mb-4' />
-				<h1 className='text-2xl font-semibold'>{title}</h1>
+			<div className='flex flex-row items-end start mb-8'>
+				<NaoLogo className='w-20 h-auto' />
+				<span className='text-muted-foreground text-sm mx-4 border-l-1 border-border h-4'></span>
+				<h1 className='text-md font-semibold uppercase leading-none'>{title}</h1>
 			</div>
+
+			{displaySocialProviders && (isGoogleSetup.data || isGithubSetup.data) && (
+				<div className='mb-6'>
+					<div className='flex flex-col gap-3 mb-6'>
+						{isGoogleSetup.data && (
+							<Button
+								type='button'
+								variant='outline'
+								className='w-full h-11'
+								onClick={handleGoogleSignIn}
+							>
+								<GoogleIcon className='w-5 h-5' />
+								Continue with Google
+							</Button>
+						)}
+						{isGithubSetup.data && (
+							<Button
+								type='button'
+								variant='outline'
+								className='w-full h-11'
+								onClick={handleGithubSignIn}
+							>
+								<GithubIcon className='w-5 h-5' />
+								Continue with GitHub
+							</Button>
+						)}
+					</div>
+
+					<div className='relative'>
+						<div className='absolute inset-0 flex items-center'>
+							<div className='w-full border-t' />
+						</div>
+						<div className='relative flex justify-center text-xs uppercase'>
+							<span className='px-2 bg-background text-muted-foreground'>Or</span>
+						</div>
+					</div>
+				</div>
+			)}
 
 			<form
 				onSubmit={(e) => {
@@ -44,23 +95,7 @@ export function AuthForm({ form, title, submitText, children, serverError }: Aut
 				</form.Subscribe>
 			</form>
 
-			{isGoogleSetup.data && (
-				<div className='mt-6'>
-					<div className='relative'>
-						<div className='absolute inset-0 flex items-center'>
-							<div className='w-full border-t' />
-						</div>
-						<div className='relative flex justify-center text-xs uppercase'>
-							<span className='px-2 bg-background text-muted-foreground'>Or</span>
-						</div>
-					</div>
-
-					<Button type='button' variant='outline' className='w-full h-11 mt-6' onClick={handleGoogleSignIn}>
-						<GoogleIcon className='w-5 h-5' />
-						Continue with Google
-					</Button>
-				</div>
-			)}
+			{footer && <div className='mt-6 text-center text-sm text-muted-foreground'>{footer}</div>}
 		</div>
 	);
 }

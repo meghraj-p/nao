@@ -1,9 +1,13 @@
 """Unit tests for the template engine."""
 
 import json
+import sys
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
+import pytest
+
+from nao_core.config.llm import LLMConfig, LLMProvider
 from nao_core.templates.engine import (
     DEFAULT_TEMPLATES_DIR,
     TemplateEngine,
@@ -49,6 +53,8 @@ class TestTemplateEngine:
             "databases/columns.md.j2",
             "databases/preview.md.j2",
             "databases/description.md.j2",
+            "databases/how_to_use.md.j2",
+            "databases/ai_summary.md.j2",
         ]
 
         for template in expected_templates:
@@ -157,6 +163,104 @@ class TestTemplateEngine:
 
         assert engine.is_user_override("databases/columns.md.j2") is False
 
+    def test_prompt_helper_requires_llm_config(self, tmp_path: Path):
+        """prompt helper should raise clear error when llm config is missing."""
+        templates_dir = tmp_path / "templates"
+        templates_dir.mkdir()
+        (templates_dir / "test.j2").write_text("{{ prompt('hello') }}")
+
+        engine = TemplateEngine(project_path=tmp_path)
+        with pytest.raises(RuntimeError, match="ai_summary generation requires an `llm` config"):
+            engine.render("test.j2")
+
+    def test_prompt_helper_uses_configured_model(self, tmp_path: Path):
+        """prompt helper should call provider generator with configured model."""
+        templates_dir = tmp_path / "templates"
+        templates_dir.mkdir()
+        (templates_dir / "test.j2").write_text("{{ prompt('hello world') }}")
+
+        llm_config = LLMConfig(
+            provider=LLMProvider.OPENAI,
+            api_key="sk-test",
+            annotation_model="gpt-4.1-mini",
+        )
+        engine = TemplateEngine(project_path=tmp_path, llm_config=llm_config)
+
+        with patch.object(engine, "_generate_openai_compatible", return_value="AI output") as mock_generate:
+            rendered = engine.render("test.j2")
+
+        assert rendered == "AI output"
+        mock_generate.assert_called_once_with("gpt-4.1-mini", "hello world")
+
+    def test_prompt_helper_supports_bedrock_without_api_key(self, tmp_path: Path):
+        """prompt helper should not require api_key for bedrock provider."""
+        templates_dir = tmp_path / "templates"
+        templates_dir.mkdir()
+        (templates_dir / "test.j2").write_text("{{ prompt('summarize this') }}")
+
+        llm_config = LLMConfig(
+            provider=LLMProvider.BEDROCK,
+            api_key=None,
+            access_key="AKIA_TEST",
+            secret_key="SECRET_TEST",
+            aws_region="us-east-1",
+            annotation_model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        )
+        engine = TemplateEngine(project_path=tmp_path, llm_config=llm_config)
+
+        with patch.object(engine, "_generate_bedrock", return_value="Bedrock output") as mock_generate:
+            rendered = engine.render("test.j2")
+
+        assert rendered == "Bedrock output"
+        mock_generate.assert_called_once_with("anthropic.claude-3-5-sonnet-20241022-v2:0", "summarize this")
+
+    def test_generate_bedrock_uses_explicit_aws_credentials(self, tmp_path: Path, monkeypatch):
+        """Bedrock client should use configured credentials and region when provided."""
+        llm_config = LLMConfig(
+            provider=LLMProvider.BEDROCK,
+            api_key=None,
+            access_key="AKIA_TEST",
+            secret_key="SECRET_TEST",
+            aws_region="us-west-2",
+            annotation_model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        )
+        engine = TemplateEngine(project_path=tmp_path, llm_config=llm_config)
+
+        fake_client = MagicMock()
+        fake_client.converse.return_value = {"output": {"message": {"content": [{"text": "Bedrock summary"}]}}}
+        fake_boto3 = MagicMock()
+        fake_boto3.client.return_value = fake_client
+        monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
+
+        rendered = engine._generate_bedrock("anthropic.claude-3-5-sonnet-20241022-v2:0", "summarize this")
+
+        assert rendered == "Bedrock summary"
+        fake_boto3.client.assert_called_once_with(
+            "bedrock-runtime",
+            region_name="us-west-2",
+            aws_access_key_id="AKIA_TEST",
+            aws_secret_access_key="SECRET_TEST",
+        )
+        fake_client.converse.assert_called_once_with(
+            modelId="anthropic.claude-3-5-sonnet-20241022-v2:0",
+            messages=[{"role": "user", "content": [{"text": "summarize this"}]}],
+            inferenceConfig={"temperature": 0},
+        )
+
+    def test_generate_bedrock_rejects_partial_static_credentials(self, tmp_path: Path):
+        """Providing only one of access_key/secret_key should fail with a clear error."""
+        llm_config = LLMConfig(
+            provider=LLMProvider.BEDROCK,
+            api_key=None,
+            access_key="AKIA_TEST",
+            secret_key=None,
+            annotation_model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        )
+        engine = TemplateEngine(project_path=tmp_path, llm_config=llm_config)
+
+        with pytest.raises(RuntimeError, match="Bedrock configuration is incomplete"):
+            engine._generate_bedrock("anthropic.claude-3-5-sonnet-20241022-v2:0", "summarize this")
+
 
 class TestTemplateFilters:
     """Tests for custom Jinja2 filters."""
@@ -172,6 +276,34 @@ class TestTemplateFilters:
 
         parsed = json.loads(result)
         assert parsed == {"key": "value", "num": 42}
+
+    def test_to_json_filter_preserves_non_ascii(self, tmp_path: Path):
+        """to_json filter preserves non-ASCII characters (e.g. Japanese, emoji)."""
+        templates_dir = tmp_path / "templates"
+        templates_dir.mkdir()
+        (templates_dir / "test.j2").write_text("{{ data | to_json }}")
+
+        engine = TemplateEngine(project_path=tmp_path)
+        result = engine.render("test.j2", data={"name": "テスト", "emoji": "🎉"})
+
+        assert "テスト" in result
+        assert "🎉" in result
+        assert "\\u" not in result
+        parsed = json.loads(result)
+        assert parsed == {"name": "テスト", "emoji": "🎉"}
+
+    def test_to_json_filter_non_ascii_with_indent(self, tmp_path: Path):
+        """to_json filter preserves non-ASCII characters even with indentation."""
+        templates_dir = tmp_path / "templates"
+        templates_dir.mkdir()
+        (templates_dir / "test.j2").write_text("{{ data | to_json(indent=2) }}")
+
+        engine = TemplateEngine(project_path=tmp_path)
+        result = engine.render("test.j2", data={"city": "東京", "country": "日本"})
+
+        assert "東京" in result
+        assert "日本" in result
+        assert "\\u" not in result
 
     def test_to_json_filter_with_indent(self, tmp_path: Path):
         """to_json filter supports indent parameter."""
@@ -194,7 +326,8 @@ class TestTemplateFilters:
         # Path objects are not JSON serializable by default
         result = engine.render("test.j2", data={"path": Path("/some/path")})
 
-        assert "/some/path" in result
+        parsed = json.loads(result)
+        assert parsed["path"].replace("\\", "/").endswith("/some/path")
 
     def test_truncate_middle_filter_short_text(self, tmp_path: Path):
         """truncate_middle filter leaves short text unchanged."""
@@ -254,6 +387,7 @@ class TestGetTemplateEngine:
         import nao_core.templates.engine as engine_module
 
         engine_module._engine = None
+        engine_module._engine_signature = None
 
         engine = get_template_engine()
 
@@ -264,6 +398,7 @@ class TestGetTemplateEngine:
         import nao_core.templates.engine as engine_module
 
         engine_module._engine = None
+        engine_module._engine_signature = None
 
         engine1 = get_template_engine()
         engine2 = get_template_engine()
@@ -275,12 +410,85 @@ class TestGetTemplateEngine:
         import nao_core.templates.engine as engine_module
 
         engine_module._engine = None
+        engine_module._engine_signature = None
 
         engine1 = get_template_engine(project_path=None)
         engine2 = get_template_engine(project_path=tmp_path)
 
         assert engine1 is not engine2
         assert engine2.project_path == tmp_path
+
+    def test_creates_new_engine_when_llm_settings_change(self):
+        """get_template_engine should invalidate cache when llm settings change."""
+        import nao_core.templates.engine as engine_module
+
+        engine_module._engine = None
+        engine_module._engine_signature = None
+
+        llm1 = LLMConfig(provider=LLMProvider.OPENAI, api_key="k1", annotation_model="gpt-4.1-mini")
+        llm2 = LLMConfig(provider=LLMProvider.OPENAI, api_key="k1", annotation_model="gpt-4.1")
+
+        engine1 = get_template_engine(llm_config=llm1)
+        engine2 = get_template_engine(llm_config=llm2)
+
+        assert engine1 is not engine2
+
+    def test_creates_new_engine_for_different_llm_instance(self):
+        """get_template_engine should invalidate cache for different effective llm values."""
+        import nao_core.templates.engine as engine_module
+
+        engine_module._engine = None
+        engine_module._engine_signature = None
+
+        llm1 = LLMConfig(provider=LLMProvider.OPENAI, api_key="k1", annotation_model="gpt-4.1-mini")
+        llm2 = LLMConfig(provider=LLMProvider.OPENAI, api_key="k2", annotation_model="gpt-4.1-mini")
+
+        engine1 = get_template_engine(llm_config=llm1)
+        engine2 = get_template_engine(llm_config=llm2)
+
+        assert engine1 is not engine2
+
+    def test_reuses_engine_for_equivalent_llm_values(self):
+        """get_template_engine should reuse cache for equivalent llm config values."""
+        import nao_core.templates.engine as engine_module
+
+        engine_module._engine = None
+        engine_module._engine_signature = None
+
+        llm1 = LLMConfig(provider=LLMProvider.OPENAI, api_key="k1", annotation_model="gpt-4.1-mini")
+        llm2 = LLMConfig(provider=LLMProvider.OPENAI, api_key="k1", annotation_model="gpt-4.1-mini")
+
+        engine1 = get_template_engine(llm_config=llm1)
+        engine2 = get_template_engine(llm_config=llm2)
+
+        assert engine1 is engine2
+
+    def test_creates_new_engine_when_bedrock_region_changes(self):
+        """get_template_engine should invalidate cache when bedrock region changes."""
+        import nao_core.templates.engine as engine_module
+
+        engine_module._engine = None
+        engine_module._engine_signature = None
+
+        llm1 = LLMConfig(
+            provider=LLMProvider.BEDROCK,
+            annotation_model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+            access_key="AKIA_TEST",
+            secret_key="SECRET_TEST",
+            aws_region="us-east-1",
+        )
+        llm2 = LLMConfig(
+            provider=LLMProvider.BEDROCK,
+            annotation_model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+            access_key="AKIA_TEST",
+            secret_key="SECRET_TEST",
+            aws_region="eu-west-1",
+        )
+
+        engine1 = get_template_engine(llm_config=llm1)
+        engine2 = get_template_engine(llm_config=llm2)
+
+        assert engine1 is not engine2
 
 
 class TestDefaultTemplatesDir:
@@ -305,6 +513,7 @@ class TestDefaultTemplatesDir:
             "columns.md.j2",
             "preview.md.j2",
             "description.md.j2",
+            "ai_summary.md.j2",
         ]
 
         for filename in expected_files:

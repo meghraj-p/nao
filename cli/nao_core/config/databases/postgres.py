@@ -1,11 +1,14 @@
-from typing import Any, Literal
+from __future__ import annotations
 
-import ibis
-from ibis import BaseBackend
+from typing import TYPE_CHECKING, Any, Literal
+
 from pydantic import Field
 
 from nao_core.config.exceptions import InitError
 from nao_core.ui import ask_text
+
+if TYPE_CHECKING:
+    from ibis import BaseBackend
 
 from .base import DatabaseConfig
 from .context import DatabaseContext
@@ -53,6 +56,12 @@ class PostgresDatabaseContext(DatabaseContext):
         rows = self._conn.raw_sql(query).fetchall()  # type: ignore[union-attr]
         return {row[0]: str(row[1]) for row in rows if row[1]}
 
+    def _cast_float(self, expr: str) -> str:
+        return f"CAST({expr} AS DOUBLE PRECISION)"
+
+    def _cast_complex_to_string(self, col_sql: str) -> str:
+        return f"{col_sql}::TEXT"
+
 
 class PostgresConfig(DatabaseConfig):
     """PostgreSQL-specific configuration."""
@@ -92,6 +101,10 @@ class PostgresConfig(DatabaseConfig):
 
     def connect(self) -> BaseBackend:
         """Create an Ibis PostgreSQL connection."""
+        from nao_core.deps import require_database_backend
+
+        require_database_backend("postgres")
+        import ibis
 
         kwargs: dict = {
             "host": self.host,
@@ -124,6 +137,9 @@ class PostgresConfig(DatabaseConfig):
 
     def create_context(self, conn: BaseBackend, schema: str, table_name: str) -> PostgresDatabaseContext:
         return PostgresDatabaseContext(conn, schema, table_name)
+
+    def get_query_history_sql(self, days: int) -> str | None:
+        return "SELECT query AS query_text FROM pg_stat_statements WHERE calls > 0 LIMIT 10000"
 
     def check_connection(self) -> tuple[bool, str]:
         """Test connectivity to PostgreSQL."""

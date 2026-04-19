@@ -1,0 +1,68 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { trpc } from '@/main';
+
+interface UseStoryViewerVersionsParams {
+	chatId: string;
+	storySlug: string;
+	isAgentRunning: boolean;
+	isReadonlyMode?: boolean;
+}
+
+export const useStoryViewerVersions = ({
+	chatId,
+	storySlug,
+	isAgentRunning,
+	isReadonlyMode,
+}: UseStoryViewerVersionsParams) => {
+	const queryClient = useQueryClient();
+	const { data, refetch } = useQuery({
+		...trpc.story.listVersions.queryOptions({ chatId, storySlug }),
+		enabled: !isReadonlyMode,
+	});
+	const versions = useMemo(() => data?.versions ?? [], [data?.versions]);
+	const storyTitle = data?.title;
+	const archivedAt = data?.archivedAt;
+	const [selectedVersionIndex, setSelectedVersionIndex] = useState(-1);
+	const previousRunningRef = useRef(isAgentRunning);
+
+	useEffect(() => {
+		if (previousRunningRef.current && !isAgentRunning) {
+			void refetch();
+			void queryClient.invalidateQueries({ queryKey: trpc.story.listAll.queryKey() });
+		}
+
+		previousRunningRef.current = isAgentRunning;
+	}, [isAgentRunning, queryClient, refetch]);
+
+	useEffect(() => {
+		setSelectedVersionIndex(versions.length - 1);
+	}, [versions.length]);
+
+	const currentVersion = useMemo(
+		() => versions[selectedVersionIndex] ?? versions.at(-1),
+		[versions, selectedVersionIndex],
+	);
+
+	const currentVersionNumber = selectedVersionIndex >= 0 ? selectedVersionIndex + 1 : versions.length;
+	const isViewingLatest = selectedVersionIndex === versions.length - 1;
+
+	const goToPreviousVersion = useCallback(() => {
+		setSelectedVersionIndex((index) => Math.max(0, index - 1));
+	}, []);
+
+	const goToNextVersion = useCallback(() => {
+		setSelectedVersionIndex((index) => Math.min(versions.length - 1, index + 1));
+	}, [versions.length]);
+
+	return {
+		versions,
+		storyTitle,
+		archivedAt,
+		currentVersion,
+		currentVersionNumber,
+		isViewingLatest,
+		goToPreviousVersion,
+		goToNextVersion,
+	};
+};

@@ -113,6 +113,153 @@
       "when": 1771614350511,
       "tag": "0015_user_memory_enabled",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "6",
+      "when": 1771694141518,
+      "tag": "0016_chat_message_superseded_at",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1772031581593,
+      "tag": "0017_llm_inference_memory_superseded_by",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1772124770677,
+      "tag": "0018_added_message_part_chart_image",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1772144197644,
+      "tag": "0019_add_stories",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1772640831692,
+      "tag": "0020_bedrock_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1772702832964,
+      "tag": "0021_add_source_chat_message",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "6",
+      "when": 1772706229518,
+      "tag": "0022_add_slack_provider",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1773133917020,
+      "tag": "0023_added_microsoft_teams",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1773338645081,
+      "tag": "0024_add_favs",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1773740147271,
+      "tag": "0025_archive_stories",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1773740147400,
+      "tag": "0026_add_log_table",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "6",
+      "when": 1774013997070,
+      "tag": "0027_add_shared_chat",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "6",
+      "when": 1774262217065,
+      "tag": "0028_add_telegram_channel",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "6",
+      "when": 1774271885552,
+      "tag": "0029_add_whatsapp_channel",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "6",
+      "when": 1774539602329,
+      "tag": "0030_add_chat_soft_delete",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "6",
+      "when": 1774549788607,
+      "tag": "0031_live_stories",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1774873099155,
+      "tag": "0032_add_images",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "6",
+      "when": 1775130177344,
+      "tag": "0033_add_whatsapp_links",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "6",
+      "when": 1775132290056,
+      "tag": "0034_add_fork_metadata_and_highlight_chats",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "6",
+      "when": 1775740835280,
+      "tag": "0035_add_project_provider_budget",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "6",
+      "when": 1776187665191,
+      "tag": "0036_cloud",
+      "breakpoints": true
     }
   ]
 }

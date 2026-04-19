@@ -4,16 +4,18 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { format, formatDistanceToNow } from 'date-fns';
 import { ThumbsDown, ThumbsUp } from 'lucide-react';
 import type { Granularity } from '@nao/backend/usage';
-import type { LlmProvider } from '@nao/backend/llm';
+import type { LlmProvider } from '@nao/shared/types';
 import type { ChartView } from '@/components/settings/usage-filters';
 import { UsageChartCard } from '@/components/settings/usage-chart-card';
 import { UsageFilters, dateFormats } from '@/components/settings/usage-filters';
-import { SettingsCard } from '@/components/ui/settings-card';
+import { SettingsCard, SettingsPageWrapper } from '@/components/ui/settings-card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { trpc } from '@/main';
 import { Empty } from '@/components/ui/empty';
+import { requireAdmin } from '@/lib/require-admin';
 
 export const Route = createFileRoute('/_sidebar-layout/settings/usage')({
+	beforeLoad: requireAdmin,
 	component: UsagePage,
 });
 
@@ -47,7 +49,7 @@ function UsagePage() {
 	);
 
 	return (
-		<>
+		<SettingsPageWrapper>
 			{chartView === 'messages' && (
 				<UsageChartCard
 					title='Messages'
@@ -56,9 +58,15 @@ function UsagePage() {
 					isFetching={messagesUsage.isFetching}
 					isError={messagesUsage.isError}
 					data={chartData}
-					chartType='bar'
+					chartType='stacked_bar'
 					xAxisLabelFormatter={(value) => format(new Date(value), dateFormats[granularity])}
-					series={[{ data_key: 'messageCount', color: 'var(--chart-1)', label: 'Number of messages' }]}
+					series={[
+						{ data_key: 'webMessageCount', color: 'var(--chart-1)', label: 'Web' },
+						{ data_key: 'slackMessageCount', color: 'var(--chart-2)', label: 'Slack' },
+						{ data_key: 'teamsMessageCount', color: 'var(--chart-3)', label: 'Teams' },
+						{ data_key: 'telegramMessageCount', color: 'var(--chart-4)', label: 'Telegram' },
+						{ data_key: 'whatsappMessageCount', color: 'var(--chart-5)', label: 'WhatsApp' },
+					]}
 					filters={filtersComponent}
 				/>
 			)}
@@ -166,6 +174,6 @@ function UsagePage() {
 					</Table>
 				)}
 			</SettingsCard>
-		</>
+		</SettingsPageWrapper>
 	);
 }

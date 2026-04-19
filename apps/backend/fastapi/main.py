@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 load_dotenv()
 
-cli_path = Path(__file__).parent.parent.parent.parent / "cli"
+cli_path = Path(__file__).resolve().parent.parent.parent.parent / "cli"
 sys.path.insert(0, str(cli_path))
 
 from nao_core.config import NaoConfig, NaoConfigError
@@ -95,12 +95,14 @@ class ExecuteSQLRequest(BaseModel):
     sql: str
     nao_project_folder: str
     database_id: str | None = None
+    env_vars: dict[str, str] | None = None
 
 
 class ExecuteSQLResponse(BaseModel):
     data: list[dict]
     row_count: int
     columns: list[str]
+    dialect: str | None = None
 
 
 class RefreshResponse(BaseModel):
@@ -219,10 +221,12 @@ async def refresh_context():
 @app.post("/execute_sql", response_model=ExecuteSQLResponse)
 async def execute_sql(request: ExecuteSQLRequest):
     try:
-        # Load the nao config from the project folder
         project_path = Path(request.nao_project_folder)
-        os.chdir(project_path)
-        config = NaoConfig.try_load(project_path, raise_on_error=True)
+        config = NaoConfig.try_load(
+            project_path,
+            raise_on_error=True,
+            extra_env=request.env_vars,
+        )
         assert config is not None
 
         if len(config.databases) == 0:
@@ -231,11 +235,9 @@ async def execute_sql(request: ExecuteSQLRequest):
                 detail="No databases configured in nao_config.yaml",
             )
 
-        # Determine which database to use
         if len(config.databases) == 1:
             db_config = config.databases[0]
         elif request.database_id:
-            # Find the database by name
             db_config = next(
                 (db for db in config.databases if db.name == request.database_id),
                 None,
@@ -250,7 +252,6 @@ async def execute_sql(request: ExecuteSQLRequest):
                     },
                 )
         else:
-            # Multiple databases and no database_id specified
             available_databases = [db.name for db in config.databases]
             raise HTTPException(
                 status_code=400,
@@ -271,6 +272,7 @@ async def execute_sql(request: ExecuteSQLRequest):
             data=data,
             row_count=len(data),
             columns=[str(c) for c in df.columns.tolist()],
+            dialect=db_config.type,
         )
     except HTTPException:
         raise
@@ -295,4 +297,5 @@ if __name__ == "__main__":
                 f"Set NAO_DEFAULT_PROJECT_PATH in .env to an absolute path or a path relative to the repo root ({cli_path.parent})"
             )
         os.chdir(project_path)
+
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)

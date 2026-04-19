@@ -1,0 +1,190 @@
+import { memo, useMemo, useRef } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { useParams, useRouterState } from '@tanstack/react-router';
+import { TextShimmer } from '../ui/text-shimmer';
+import { ChatError } from './chat-error';
+import { FollowUpSuggestions } from './follow-up-suggestions';
+import { AssistantMessage } from './assistant-message';
+import { UserMessage } from './user-message';
+import type { UIMessage } from '@nao/backend/chat';
+import type { MessageGroup } from '@/types/ai';
+import {
+	groupMessages,
+	checkIsLastMessageStreaming,
+	getLastFollowUpSuggestionsToolCall,
+	checkIsSomeToolsExecuting,
+} from '@/lib/ai';
+import {
+	Conversation,
+	ConversationContent,
+	ConversationEmptyState,
+	ConversationScrollButton,
+} from '@/components/ui/conversation';
+import { cn, isLast } from '@/lib/utils';
+import { useAgentContext } from '@/contexts/agent.provider';
+import { useHeight } from '@/hooks/use-height';
+import { useDebounceValue } from '@/hooks/use-debounce-value';
+import { useScrollToBottomOnNewUserMessage } from '@/hooks/use-scroll-to-bottom-on-new-user-message';
+import { useChatId } from '@/hooks/use-chat-id';
+import { trpc } from '@/main';
+
+const DEBUG_MESSAGES = false;
+
+export function ChatMessages() {
+	const chatId = useParams({ strict: false }).chatId;
+	const contentRef = useRef<HTMLDivElement>(null);
+	const containerHeight = useHeight(contentRef, [chatId]);
+
+	// Skip fade-in animation when navigating from home after sending a message
+	const fromMessageSend = useRouterState({ select: (state) => state.location.state.fromMessageSend });
+
+	return (
+		<div
+			className={cn('mt-6 h-full min-h-0 flex', !fromMessageSend && 'animate-fade-in')}
+			ref={contentRef}
+			style={{ '--container-height': `${containerHeight}px` } as React.CSSProperties}
+			key={chatId}
+		>
+			<Conversation>
+				<ConversationContent className='max-w-3xl mx-auto gap-0 pt-15 max-md:pt-0'>
+					<ChatMessagesContent />
+				</ConversationContent>
+
+				<ConversationScrollButton />
+			</Conversation>
+		</div>
+	);
+}
+
+export const ChatMessagesContent = memo(() => {
+	const chatId = useChatId();
+	const { messages, isRunning } = useAgentContext();
+	const isAgentGenerating = isRunning && checkIsLastMessageStreaming(messages);
+	const someToolsExectuting = isRunning && checkIsSomeToolsExecuting(messages);
+
+	// Debounce when the agent is running but not generating content yet to prevent flickering
+	const showThinkingLoader = useDebounceValue(isRunning && !isAgentGenerating && !someToolsExectuting, {
+		delay: 50,
+		skipDebounce: (value) => !value, // Skip debounce if the value equals `false` to immediately remove the loader
+	});
+	const followUpSuggestionsToolCall = useMemo(() => getLastFollowUpSuggestionsToolCall(messages), [messages]);
+	const extraComponentsRef = useRef<HTMLDivElement>(null);
+	const extraComponentsHeight = useHeight(extraComponentsRef);
+	const visibleMessages = useMemo(() => messages.filter((m) => !m.isForked), [messages]);
+	const messageGroups = useMemo(() => groupMessages(visibleMessages), [visibleMessages]);
+
+	const forkMetadata = useQuery({
+		...trpc.chat.getForkMetadata.queryOptions({ chatId: chatId ?? '' }),
+		enabled: !!chatId,
+	});
+	const storyIntroMessageId =
+		forkMetadata.data?.type === 'story' ? messageGroups[0]?.assistantMessages[0]?.id : undefined;
+
+	useScrollToBottomOnNewUserMessage(messages);
+
+	return (
+		<div
+			className='flex flex-col gap-8 max-md:gap-0'
+			style={{ '--extra-components-height': `${extraComponentsHeight}px` } as React.CSSProperties}
+		>
+			{messageGroups.length === 0 ? (
+				<ConversationEmptyState />
+			) : (
+				messageGroups.map((group) => (
+					<MessageGroup
+						key={group.userMessage?.id ?? group.assistantMessages[0]?.id}
+						userMessage={group.userMessage}
+						assistantMessages={group.assistantMessages}
+						showLoader={showThinkingLoader && isLast(group, messageGroups)}
+						isLastMessage={(messageId) => messageId === visibleMessages.at(-1)?.id}
+						isRunning={isRunning}
+						storyIntroMessageId={storyIntroMessageId}
+					/>
+				))
+			)}
+
+			<div className='flex flex-col gap-4' ref={extraComponentsRef}>
+				{followUpSuggestionsToolCall && <FollowUpSuggestions toolPart={followUpSuggestionsToolCall} />}
+
+				<ChatError className='mt-4' />
+			</div>
+		</div>
+	);
+});
+
+const MessageGroup = ({
+	userMessage,
+	assistantMessages,
+	showLoader,
+	isLastMessage,
+	isRunning,
+	storyIntroMessageId,
+}: {
+	userMessage: UIMessage | null;
+	assistantMessages: UIMessage[];
+	showLoader: boolean;
+	isLastMessage: (messageId: string) => boolean;
+	isRunning: boolean;
+	storyIntroMessageId: string | undefined;
+}) => {
+	const messages = userMessage ? [userMessage, ...assistantMessages] : assistantMessages;
+	return (
+		<div className='flex flex-col gap-4 last:min-h-[calc(var(--container-height)-var(--extra-components-height)-calc(2*24px+16px))] group/message last:mb-4'>
+			{messages.map((message) => (
+				<MessageBlock
+					key={message.id}
+					message={message}
+					showLoader={showLoader}
+					isLastMessage={isLastMessage(message.id)}
+					isRunning={isRunning}
+					storyIntroMessageId={storyIntroMessageId}
+				/>
+			))}
+
+			{showLoader && !assistantMessages.length && <TextShimmer className='px-3' />}
+		</div>
+	);
+};
+
+const MessageBlock = ({
+	message,
+	showLoader,
+	isLastMessage,
+	isRunning,
+	storyIntroMessageId,
+}: {
+	message: UIMessage;
+	showLoader: boolean;
+	isLastMessage: boolean;
+	isRunning: boolean;
+	storyIntroMessageId: string | undefined;
+}) => {
+	const isUser = message.role === 'user';
+
+	if (DEBUG_MESSAGES) {
+		return (
+			<div
+				className={cn(
+					'flex gap-3 text-xs',
+					isUser ? 'justify-end bg-primary text-primary-foreground w-min ml-auto' : 'justify-start',
+				)}
+			>
+				<pre>{JSON.stringify(message, null, 2)}</pre>
+			</div>
+		);
+	}
+
+	if (isUser) {
+		return <UserMessage message={message} />;
+	}
+
+	return (
+		<AssistantMessage
+			message={message}
+			showLoader={showLoader && isLastMessage}
+			isSettled={!isLastMessage || !isRunning}
+			isRunning={isRunning}
+			storyIntroMessageId={storyIntroMessageId}
+		/>
+	);
+};

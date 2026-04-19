@@ -1,18 +1,18 @@
 import { TRPCError } from '@trpc/server';
-import { hashPassword } from 'better-auth/crypto';
 import { z } from 'zod/v4';
 
 import * as memoryQueries from '../queries/memory';
 import * as projectQueries from '../queries/project.queries';
 import * as userQueries from '../queries/user.queries';
-import { emailService } from '../services/email.service';
-import { memoryService } from '../services/memory';
+import { addTeamMember } from '../services/team-member';
+import { buildUserAddedEmail } from '../utils/email-builders';
 import { adminProtectedProcedure, projectProtectedProcedure, protectedProcedure, publicProcedure } from './trpc';
 
 export const userRoutes = {
 	countAll: publicProcedure.query(() => {
 		return userQueries.countAll();
 	}),
+
 	get: projectProtectedProcedure.input(z.object({ userId: z.string() })).query(async ({ input, ctx }) => {
 		if (ctx.userRole !== 'admin' && input.userId !== ctx.user.id) {
 			throw new TRPCError({ code: 'FORBIDDEN', message: 'Only admins can access other users information' });
@@ -24,6 +24,7 @@ export const userRoutes = {
 		}
 		return user;
 	}),
+
 	modify: projectProtectedProcedure
 		.input(
 			z.object({
@@ -53,6 +54,7 @@ export const userRoutes = {
 				await userQueries.modify(input.userId, input.name);
 			}
 		}),
+
 	addUserToProject: adminProtectedProcedure
 		.input(
 			z.object({
@@ -61,81 +63,17 @@ export const userRoutes = {
 			}),
 		)
 		.mutation(async ({ input, ctx }) => {
-			const user = await userQueries.get({ email: input.email });
+			const projectId = ctx.project.id;
 
-			if (!user) {
-				if (!input.name) {
-					throw new TRPCError({ code: 'NOT_FOUND', message: 'USER_DOES_NOT_EXIST' });
-				}
-				const userId = crypto.randomUUID();
-				const accountId = crypto.randomUUID();
-
-				const password = crypto.randomUUID().slice(0, 8);
-				const hashedPassword = await hashPassword(password);
-
-				const newUser = await userQueries.create(
-					{
-						id: userId,
-						name: input.name!,
-						email: input.email,
-						requiresPasswordReset: true,
-					},
-					{
-						id: accountId,
-						userId: userId,
-						accountId: userId,
-						providerId: 'credential',
-						password: hashedPassword,
-					},
-					{
-						userId: '',
-						projectId: ctx.project?.id || '',
-						role: 'user',
-					},
-				);
-
-				await emailService.safeSendEmail({
-					user: newUser,
-					type: 'createUser',
-					projectName: ctx.project?.name,
-					temporaryPassword: password,
-				});
-
-				const newUserWithRole = {
-					id: newUser.id,
-					name: newUser.name,
-					email: newUser.email,
-					role: 'user',
-				};
-
-				return { newUser: newUserWithRole, password };
-			}
-
-			const existingMember = await projectQueries.getProjectMember(ctx.project!.id, user.id);
-			if (existingMember) {
-				throw new TRPCError({ code: 'BAD_REQUEST', message: 'User is already a member of the project' });
-			}
-
-			await projectQueries.addProjectMember({
-				userId: user.id,
-				projectId: ctx.project!.id,
-				role: 'user',
+			return addTeamMember({
+				email: input.email,
+				name: input.name,
+				checkExisting: async (userId) => !!(await projectQueries.getProjectMember(projectId, userId)),
+				addMember: async (userId) => {
+					await projectQueries.addProjectMember({ userId, projectId, role: 'user' });
+				},
+				buildEmail: (user, password) => buildUserAddedEmail(user, ctx.project.name, 'project', password),
 			});
-
-			await emailService.safeSendEmail({
-				user,
-				type: 'createUser',
-				projectName: ctx.project?.name,
-			});
-
-			const newUserWithRole = {
-				id: user.id,
-				name: user.name,
-				email: user.email,
-				role: 'user',
-			};
-
-			return { success: true, newUser: newUserWithRole };
 		}),
 
 	getMemorySettings: protectedProcedure.query(async ({ ctx }) => {
@@ -143,40 +81,7 @@ export const userRoutes = {
 		return { memoryEnabled };
 	}),
 
-	updateMemorySettings: protectedProcedure
-		.input(z.object({ memoryEnabled: z.boolean() }))
-		.mutation(async ({ ctx, input }) => {
-			await userQueries.setMemoryEnabled(ctx.user.id, input.memoryEnabled);
-			return { memoryEnabled: input.memoryEnabled };
-		}),
-
 	getMemories: protectedProcedure.query(async ({ ctx }) => {
 		return memoryQueries.getUserMemories(ctx.user.id);
-	}),
-
-	updateMemory: protectedProcedure
-		.input(
-			z.object({
-				memoryId: z.string(),
-				content: z.string().trim().min(1).max(1000),
-			}),
-		)
-		.mutation(async ({ ctx, input }) => {
-			const content = memoryService.normalizeMemoryContent(input.content);
-			if (!content) {
-				throw new TRPCError({ code: 'BAD_REQUEST', message: 'Memory content cannot be empty.' });
-			}
-			const updated = await memoryQueries.updateUserMemoryContent(ctx.user.id, input.memoryId, content);
-			if (!updated) {
-				throw new TRPCError({ code: 'NOT_FOUND', message: 'Memory not found.' });
-			}
-			return updated;
-		}),
-
-	deleteMemory: protectedProcedure.input(z.object({ memoryId: z.string() })).mutation(async ({ ctx, input }) => {
-		const deleted = await memoryQueries.deleteUserMemory(ctx.user.id, input.memoryId);
-		if (!deleted) {
-			throw new TRPCError({ code: 'NOT_FOUND', message: 'Memory not found.' });
-		}
 	}),
 };

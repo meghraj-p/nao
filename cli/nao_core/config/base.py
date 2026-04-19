@@ -1,17 +1,22 @@
+from __future__ import annotations
+
 import os
 import re
 import sys
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, Any, cast
 
 import yaml
-from ibis import BaseBackend
 from pydantic import BaseModel, Field, ValidationError, model_validator
 from rich.console import Console
 
+if TYPE_CHECKING:
+    from ibis import BaseBackend
+
 from nao_core.ui import UI, ask_confirm, ask_select
 
-from .databases import DATABASE_CONFIG_CLASSES, AnyDatabaseConfig, DatabaseType, parse_database_config
+from .databases import DATABASE_CONFIG_CLASSES, AnyDatabaseConfig, DatabaseTemplate, DatabaseType, parse_database_config
+from .error_handler import format_all_validation_errors
 from .llm import LLMConfig
 from .mcp import McpConfig
 from .notion import NotionConfig
@@ -38,6 +43,8 @@ class NaoConfig(BaseModel):
     mcp: McpConfig | None = Field(default=None, description="The MCP configuration")
     skills: SkillsConfig | None = Field(default=None, description="The Skills configuration")
 
+    _missing_env_vars: dict[str, None] = {}
+
     @model_validator(mode="before")
     @classmethod
     def parse_databases(cls, data: dict) -> dict:
@@ -55,11 +62,15 @@ class NaoConfig(BaseModel):
         if existing:
             return cls._prompt_extend(existing)
 
+        databases = cls._prompt_databases()
+        llm, enable_ai_summary = cls._prompt_llm(databases=databases)
+        databases = cls._configure_ai_summary_templates(databases, llm, enable_ai_summary)
+
         return cls(
             project_name=project_name,
-            databases=cls._prompt_databases(),
+            databases=databases,
             repos=cls._prompt_repos(),
-            llm=cls._prompt_llm(),
+            llm=llm,
             slack=cls._prompt_slack(),
             notion=cls._prompt_notion(),
             mcp=cls._prompt_mcp(project_name),
@@ -99,8 +110,10 @@ class NaoConfig(BaseModel):
         databases.extend(cls._prompt_databases(has_existing=bool(existing.databases)))
         repos.extend(cls._prompt_repos(has_existing=bool(existing.repos)))
 
-        if not llm:
-            llm = cls._prompt_llm()
+        if llm:
+            enable_ai_summary = cls._prompt_enable_ai_summary_templates(databases)
+        else:
+            llm, enable_ai_summary = cls._prompt_llm(databases=databases)
 
         if not slack:
             slack = cls._prompt_slack()
@@ -113,6 +126,8 @@ class NaoConfig(BaseModel):
 
         if not skills:
             skills = cls._prompt_skills(existing.project_name)
+
+        databases = cls._configure_ai_summary_templates(databases, llm, enable_ai_summary)
 
         return cls(
             project_name=existing.project_name,
@@ -139,7 +154,7 @@ class NaoConfig(BaseModel):
 
             db_type = ask_select("Select database type:", choices=DatabaseType.choices())
 
-            config_class = DATABASE_CONFIG_CLASSES[DatabaseType(db_type)]
+            config_class = cast(Any, DATABASE_CONFIG_CLASSES[DatabaseType(db_type)])
             db_config = cast(AnyDatabaseConfig, config_class.promptConfig())
             databases.append(db_config)
 
@@ -170,11 +185,36 @@ class NaoConfig(BaseModel):
         return repos
 
     @staticmethod
-    def _prompt_llm() -> LLMConfig | None:
-        """Prompt for LLM configuration using questionary."""
+    def _prompt_llm(databases: list[AnyDatabaseConfig] | None = None) -> tuple[LLMConfig | None, bool]:
+        """Prompt for LLM configuration and optional ai_summary settings."""
         if ask_confirm("Set up LLM configuration?", default=True):
-            return LLMConfig.promptConfig()
-        return None
+            enable_ai_summary = NaoConfig._prompt_enable_ai_summary_templates(databases or [])
+            return LLMConfig.promptConfig(prompt_annotation_model=enable_ai_summary), enable_ai_summary
+        return None, False
+
+    @staticmethod
+    def _prompt_enable_ai_summary_templates(databases: list[AnyDatabaseConfig]) -> bool:
+        """Prompt whether ai_summary should be enabled for configured databases."""
+        if not databases:
+            return False
+
+        return ask_confirm("Enable `ai_summary` template for all configured databases?", default=True)
+
+    @staticmethod
+    def _configure_ai_summary_templates(
+        databases: list[AnyDatabaseConfig],
+        llm: LLMConfig | None,
+        enable_ai_summary: bool,
+    ) -> list[AnyDatabaseConfig]:
+        """Enable ai_summary template for configured databases when requested."""
+        if not databases or llm is None or not enable_ai_summary:
+            return databases
+
+        for db in databases:
+            if DatabaseTemplate.AI_SUMMARY not in db.templates:
+                db.templates.append(DatabaseTemplate.AI_SUMMARY)
+
+        return databases
 
     @staticmethod
     def _prompt_slack() -> SlackConfig | None:
@@ -208,6 +248,10 @@ class NaoConfig(BaseModel):
         """Save the configuration to a YAML file."""
         config_file = path / "nao_config.yaml"
         with config_file.open("w") as f:
+            # Documentation Link
+            f.write("# Configuration documentation:\n")
+            f.write("# https://docs.getnao.io/nao-agent/context-builder/configuration#nao_config-yaml\n\n")
+
             yaml.dump(
                 self.model_dump(mode="json", by_alias=True, exclude_none=True),
                 f,
@@ -217,12 +261,17 @@ class NaoConfig(BaseModel):
             )
 
     @classmethod
-    def load(cls, path: Path) -> "NaoConfig":
+    def load(
+        cls,
+        path: Path,
+        extra_env: dict[str, str] | None = None,
+    ) -> "NaoConfig":
         """Load the configuration from a YAML file."""
         config_file = path / "nao_config.yaml"
         content = config_file.read_text()
-        content = cls._process_env_vars(content)
-        data = yaml.safe_load(content)
+        processed_content, env_vars = cls._process_env_vars(content, extra_env=extra_env)
+        cls._missing_env_vars = {k: None for k, v in env_vars.items() if v is None}
+        data = yaml.safe_load(processed_content)
         return cls.model_validate(data)
 
     def get_connection(self, name: str) -> BaseBackend:
@@ -239,18 +288,19 @@ class NaoConfig(BaseModel):
     @classmethod
     def try_load(
         cls,
-        path: Path | None = None,
+        path: Path,
         *,
         exit_on_error: bool = False,
         raise_on_error: bool = False,
+        extra_env: dict[str, str] | None = None,
     ) -> "NaoConfig | None":
         """Try to load config from path.
 
         Args:
-            path: Directory containing nao_config.yaml. Defaults to NAO_DEFAULT_PROJECT_PATH
-                  environment variable if set, otherwise current directory.
+            path: Directory containing nao_config.yaml.
             exit_on_error: If True, prints error message and calls sys.exit(1) on failure.
             raise_on_error: If True, raises NaoConfigError on failure.
+            extra_env: Optional env vars that take precedence over os.environ during template resolution.
         Returns:
             NaoConfig if loaded successfully, None if failed and both flags are False.
         """
@@ -274,15 +324,23 @@ class NaoConfig(BaseModel):
 
         try:
             os.chdir(path)
-            return cls.load(path)
+            return cls.load(path, extra_env=extra_env)
         except yaml.YAMLError as e:
             handle_error(f"Failed to load nao_config.yaml: Invalid YAML syntax: {e}")
             return None
         except ValidationError as e:
-            errors = "; ".join(
-                f"{' → '.join(str(x) for x in err['loc']) or 'config'}: {err['msg']}" for err in e.errors()
-            )
-            handle_error(f"Failed to load nao_config.yaml: {errors}")
+            # Build detailed error message with suggestions
+            main_errors = format_all_validation_errors(e, cls)
+            msg = f"Failed to load nao_config.yaml:\n  • {main_errors}"
+
+            # Add warning about missing env vars if any
+            if cls._missing_env_vars:
+                env_var_warnings = "\n  • ".join(
+                    f"{k} (environment variable not set or empty)" for k in cls._missing_env_vars.keys()
+                )
+                msg += f"\n\nWarning: Missing or empty environment variables:\n  • {env_var_warnings}"
+
+            handle_error(msg)
             return None
         except ValueError as e:
             handle_error(f"Failed to load nao_config.yaml: {e}")
@@ -294,12 +352,31 @@ class NaoConfig(BaseModel):
         return cls.model_json_schema()
 
     @staticmethod
-    def _process_env_vars(content: str) -> str:
-        # Support both ${{ env('VAR') }} and {{ env('VAR') }} formats
+    def _process_env_vars(
+        content: str,
+        extra_env: dict[str, str] | None = None,
+    ) -> tuple[str, dict[str, str | None]]:
+        """Support both ${{ env('VAR') }} and {{ env('VAR') }} formats.
+        Returns:
+            Tuple of (processed_content, env_var_status) where env_var_status maps
+            env var names to their values (None if not set or empty)
+        """
         regex = re.compile(r"\$?\{\{\s*env\(['\"]([^'\"]+)['\"]\)\s*\}\}")
+        env_vars: dict[str, str | None] = {}
 
         def replacer(match: re.Match[str]) -> str:
             env_var = match.group(1)
-            return os.environ.get(env_var, "")
+            if extra_env is not None and env_var in extra_env:
+                value = extra_env[env_var]
+            else:
+                value = os.environ.get(env_var)
+            env_vars[env_var] = value if value else None
+            return value or ""
 
-        return regex.sub(replacer, content)
+        processed = regex.sub(replacer, content)
+        return processed, env_vars
+
+
+def resolve_project_path() -> Path:
+    """Resolve the nao project directory from the current working directory."""
+    return Path.cwd()

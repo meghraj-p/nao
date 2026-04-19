@@ -1,0 +1,173 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Literal
+
+from pydantic import Field
+
+from nao_core.config.exceptions import InitError
+from nao_core.ui import ask_text
+
+if TYPE_CHECKING:
+    from ibis import BaseBackend
+
+from .base import DatabaseConfig
+from .context import DatabaseContext
+
+EXCLUDED_SCHEMAS = {"information_schema", "default", "sys", "pg_catalog", "test"}
+
+
+def _normalize_schema_name(value: object) -> str:
+    """Normalize schema names returned by different Trino drivers/connectors."""
+    if value is None:
+        return ""
+    return str(value).strip().strip('"').strip("'")
+
+
+def _is_excluded_schema(value: object) -> bool:
+    schema = _normalize_schema_name(value).lower()
+    return not schema or schema in {"none", "null"} or schema in EXCLUDED_SCHEMAS or schema.startswith("pg_")
+
+
+class TrinoDatabaseContext(DatabaseContext):
+    def _array_unnest_join(self, table_sql: str, col_sql: str, alias: str) -> str:
+        return f"{table_sql} CROSS JOIN UNNEST({col_sql}) AS t({alias})"
+
+    def _cast_complex_to_string(self, col_sql: str) -> str:
+        return f"CAST({col_sql} AS VARCHAR)"
+
+    def _stddev(self, expr: str) -> str:
+        return f"STDDEV_POP({expr})"
+
+    def _numeric_agg_fragments(self, col_sql: str, col: dict) -> list[tuple[str, str]]:
+        col_type = self._normalize_type(col["type"])
+        is_numeric = self._is_numeric_stats_column(col)
+        is_date = any(t in col_type.lower() for t in ("date", "timestamp", "time"))
+
+        frags = []
+        if is_numeric:
+            frags.append(("col_min", f"MIN({col_sql})"))
+            frags.append(("col_max", f"MAX({col_sql})"))
+            frags.append(("col_mean", f"AVG({self._cast_float(col_sql)})"))
+            frags.append(("col_stddev", f"{self._stddev(self._cast_float(col_sql))}"))
+        elif is_date:
+            frags.append(("col_min", f"CAST(MIN({col_sql}) AS VARCHAR)"))
+            frags.append(("col_max", f"CAST(MAX({col_sql}) AS VARCHAR)"))
+        return frags
+
+    def _build_top_values_query(self, col: dict) -> str:
+        col_sql = self._quote(col["name"])
+        table_sql = f"{self._quote(self._schema)}.{self._quote(self._table_name)}"
+        partition_filter = self._partition_filter()
+        where_clause = f"WHERE {partition_filter}" if partition_filter else ""
+        return f"""
+            SELECT {col_sql} AS value, COUNT(*) AS cnt
+            FROM {table_sql}
+            {where_clause}
+            GROUP BY {col_sql}
+            ORDER BY cnt DESC, {col_sql} ASC
+            LIMIT 10
+        """.strip()
+
+
+class TrinoConfig(DatabaseConfig):
+    """Trino-specific configuration."""
+
+    type: Literal["trino"] = "trino"
+    host: str = Field(description="Trino coordinator host")
+    port: int = Field(default=8080, description="Trino coordinator port")
+    catalog: str = Field(description="Catalog name")
+    user: str = Field(description="Username")
+    schema_name: str | None = Field(default=None, description="Default schema (optional)")
+    password: str | None = Field(default=None, description="Password (optional)")
+
+    @classmethod
+    def promptConfig(cls) -> "TrinoConfig":
+        """Interactively prompt the user for Trino configuration."""
+        name = ask_text("Connection name:", default="trino-prod") or "trino-prod"
+        host = ask_text("Host:", default="localhost") or "localhost"
+        port_str = ask_text("Port:", default="8080") or "8080"
+
+        if not port_str.isdigit():
+            raise InitError("Port must be a valid integer.")
+
+        catalog = ask_text("Catalog name:", required_field=True)
+        user = ask_text("Username:", required_field=True)
+        password = ask_text("Password (optional):", password=True) or None
+        schema_name = ask_text("Default schema (optional):")
+
+        return TrinoConfig(
+            name=name,
+            host=host,
+            port=int(port_str),
+            catalog=catalog,  # type: ignore[arg-type]
+            user=user,  # type: ignore[arg-type]
+            password=password,
+            schema_name=schema_name,
+        )
+
+    def connect(self) -> BaseBackend:
+        """Create an Ibis Trino connection."""
+        from nao_core.deps import require_database_backend
+
+        require_database_backend("trino")
+        import ibis
+
+        kwargs: dict = {
+            "host": self.host,
+            "port": self.port,
+            "user": self.user,
+            "database": self.catalog,
+        }
+
+        if self.schema_name:
+            kwargs["schema"] = self.schema_name
+
+        if self.password:
+            kwargs["password"] = self.password
+
+        return ibis.trino.connect(**kwargs)
+
+    def get_database_name(self) -> str:
+        """Get the database name for Trino."""
+        return self.catalog
+
+    def get_schemas(self, conn: BaseBackend) -> list[str]:
+        if self.schema_name:
+            return [self.schema_name]
+
+        # Prefer Trino-native listing to avoid backend-specific list_databases behavior.
+        try:
+            escaped_catalog = self.catalog.replace('"', '""')
+            rows = conn.raw_sql(f'SHOW SCHEMAS FROM "{escaped_catalog}"').fetchall()  # type: ignore[union-attr]
+            schemas = [
+                _normalize_schema_name(row[0]) for row in rows if row and row[0] and not _is_excluded_schema(row[0])
+            ]
+            return sorted(set(schemas))
+        except Exception:
+            pass
+
+        list_databases = getattr(conn, "list_databases", None)
+        if list_databases:
+            try:
+                schemas = [_normalize_schema_name(s) for s in list_databases() if not _is_excluded_schema(s)]
+                return sorted(set(schemas))
+            except Exception:
+                return []
+
+        return []
+
+    def create_context(self, conn: BaseBackend, schema: str, table_name: str) -> TrinoDatabaseContext:
+        return TrinoDatabaseContext(conn, schema, table_name)
+
+    def check_connection(self) -> tuple[bool, str]:
+        """Test connectivity to Trino."""
+        try:
+            conn = self.connect()
+            if self.schema_name:
+                tables = conn.list_tables(database=self.schema_name)
+                return True, f"Connected successfully ({len(tables)} tables found)"
+
+            schemas = self.get_schemas(conn)
+            return True, f"Connected successfully ({len(schemas)} schemas found)"
+        except Exception as e:
+            return False, str(e)

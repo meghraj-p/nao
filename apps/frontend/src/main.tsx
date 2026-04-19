@@ -8,6 +8,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import superjson from 'superjson';
 import { PostHogProvider } from './contexts/posthog.provider';
 import { ThemeProvider } from './contexts/theme.provider';
+import { McpProvider } from './contexts/mcp';
+import { getActiveProjectId } from './lib/active-project';
 import { routeTree } from './routeTree.gen';
 import reportWebVitals from './reportWebVitals';
 import type { TrpcRouter } from '@nao/backend/trpc';
@@ -19,6 +21,7 @@ declare module '@tanstack/react-router' {
 	}
 	interface HistoryState {
 		fromMessageSend?: boolean;
+		openStorySlug?: string;
 	}
 }
 
@@ -33,7 +36,7 @@ const router = createRouter({
 });
 
 /** Query client for state management */
-const queryClient = new QueryClient({
+export const queryClient = new QueryClient({
 	defaultOptions: {
 		queries: {
 			retry: false,
@@ -49,6 +52,10 @@ export const trpcClient = createTRPCClient<TrpcRouter>({
 		httpBatchLink({
 			url: '/api/trpc',
 			transformer: superjson,
+			headers() {
+				const activeProjectId = getActiveProjectId();
+				return activeProjectId ? { 'x-nao-project-id': activeProjectId } : {};
+			},
 		}),
 	],
 });
@@ -67,9 +74,11 @@ if (!rootElement.innerHTML) {
 		<StrictMode>
 			<ThemeProvider>
 				<QueryClientProvider client={queryClient}>
-					<PostHogProvider>
-						<RouterProvider router={router} />
-					</PostHogProvider>
+					<McpProvider>
+						<PostHogProvider>
+							<RouterProvider router={router} />
+						</PostHogProvider>
+					</McpProvider>
 				</QueryClientProvider>
 			</ThemeProvider>
 		</StrictMode>,

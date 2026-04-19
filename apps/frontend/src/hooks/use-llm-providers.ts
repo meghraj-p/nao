@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { llmProviderSchema } from '@nao/backend/llm';
-import type { LlmProvider } from '@nao/backend/llm';
+import type { LlmProvider } from '@nao/shared/types';
 import { trpc } from '@/main';
 
 export interface EditingState {
@@ -51,7 +51,12 @@ export function useLlmProviders() {
 		]);
 	};
 
-	const handleSubmit = async (values: { apiKey?: string; enabledModels: string[]; baseUrl?: string }) => {
+	const handleSubmit = async (values: {
+		apiKey?: string;
+		credentials?: Record<string, string>;
+		enabledModels: string[];
+		baseUrl?: string;
+	}) => {
 		if (!editingState?.provider) {
 			return;
 		}
@@ -59,6 +64,7 @@ export function useLlmProviders() {
 		await upsertLlmConfig.mutateAsync({
 			provider: editingState.provider,
 			apiKey: values.apiKey,
+			credentials: values.credentials,
 			enabledModels: values.enabledModels,
 			baseUrl: values.baseUrl,
 		});

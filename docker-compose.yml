@@ -9,7 +9,7 @@ services:
             POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nao}
             POSTGRES_DB: ${POSTGRES_DB:-nao}
         ports:
-            - '8888:5432'
+            - '5432:5432'
         volumes:
             - nao_postgres_data:/var/lib/postgresql/data
         healthcheck:
@@ -38,12 +38,6 @@ services:
             BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
             OPENAI_API_KEY: ${OPENAI_API_KEY}
             ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
-
-            # =================================================================
-            # Slack Integration (optional)
-            # =================================================================
-            SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN}
-            SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET}
 
             # =================================================================
             # Database for nao chat history

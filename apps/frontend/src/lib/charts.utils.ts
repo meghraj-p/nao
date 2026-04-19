@@ -1,5 +1,7 @@
 import { hashValue } from './hash';
 
+export { labelize } from '@nao/shared';
+
 export type RangeOptions = Record<string, { label: string }>;
 
 // TODO: make this dynamic based on the data
@@ -14,13 +16,13 @@ export const DATE_RANGE_OPTIONS = {
 
 export type DateRange = keyof typeof DATE_RANGE_OPTIONS;
 
-/** Filters data by date range preset (relative to the first date in the data, assuming data is ordered) */
+/** Filters data by date range preset (relative to the latest date in the data, expects ascending sort) */
 export function filterByDateRange<T extends Record<string, any>>(data: T[], xAxisKey: string, range: DateRange): T[] {
 	if (range === 'all' || data.length === 0) {
 		return data;
 	}
 
-	const latestDate = data.at(-1)?.[xAxisKey]; // Assuming data is ordered by date
+	const latestDate = data.at(-1)?.[xAxisKey];
 	if (latestDate == null) {
 		return data;
 	}
@@ -61,27 +63,26 @@ export function filterByDateRange<T extends Record<string, any>>(data: T[], xAxi
 	});
 }
 
+/** Sorts data chronologically (ascending) by a date key so charts render left-to-right */
+export function sortByDateKey<T extends Record<string, any>>(data: T[], xAxisKey: string): T[] {
+	return [...data].sort((a, b) => {
+		const dateA = new Date(a[xAxisKey]);
+		const dateB = new Date(b[xAxisKey]);
+		const validA = isValidDate(dateA);
+		const validB = isValidDate(dateB);
+		if (!validA || !validB) {
+			if (!validA && !validB) {
+				return 0;
+			}
+			return validA ? -1 : 1;
+		}
+		return dateA.getTime() - dateB.getTime();
+	});
+}
+
 function isValidDate(date: Date): boolean {
 	return !isNaN(date.getTime());
 }
-
-/** Checks if a string is in ISO 8601 date format (e.g., 2024-01-15 or 2024-01-15T12:30:00Z) */
-function isISODateString(value: string): boolean {
-	return /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d{3})?(Z|[+-]\d{2}:\d{2})?)?$/.test(value);
-}
-
-/** Converts a data key to a human readable label */
-export const labelize = (key: any) => {
-	if (typeof key === 'string' && isISODateString(key)) {
-		const date = new Date(key);
-		if (isValidDate(date)) {
-			return date.toDateString();
-		}
-	}
-	return String(key)
-		.replace(/_/g, ' ')
-		.replace(/\b\w/g, (char) => char.toUpperCase());
-};
 
 export const toKey = (value: string) => {
 	return hashValue(value);

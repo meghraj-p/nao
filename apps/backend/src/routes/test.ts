@@ -1,18 +1,13 @@
+import type { LlmSelectedModel } from '@nao/shared/types';
 import { z } from 'zod/v4';
 
 import { executeQuery } from '../agents/tools/execute-sql';
 import type { App } from '../app';
+import { noProjectMessage } from '../env';
 import { authMiddleware } from '../middleware/auth';
-import { ModelSelection } from '../services/agent.service';
+import { retrieveProjectById } from '../queries/project.queries';
 import { TestAgentService, testAgentService } from '../services/test-agent.service';
-import { llmProviderSchema } from '../types/llm';
-import { retrieveProjectById } from '../utils/ai';
-import { resolveProjectFolder } from '../utils/tools';
-
-const modelSelectionSchema = z.object({
-	provider: llmProviderSchema,
-	modelId: z.string(),
-});
+import { llmSelectedModelSchema } from '../types/llm';
 
 export const testRoutes = async (app: App) => {
 	app.addHook('preHandler', authMiddleware);
@@ -27,7 +22,7 @@ export const testRoutes = async (app: App) => {
 			schema: {
 				body: z.object({
 					prompt: z.string(),
-					model: modelSelectionSchema,
+					model: llmSelectedModelSchema,
 					sql: z.string(),
 				}),
 			},
@@ -37,13 +32,11 @@ export const testRoutes = async (app: App) => {
 			const { prompt, model, sql } = request.body;
 
 			if (!projectId) {
-				return reply
-					.status(400)
-					.send({ error: 'No project configured. Set NAO_DEFAULT_PROJECT_PATH environment variable.' });
+				return reply.status(400).send({ error: noProjectMessage() });
 			}
 
 			try {
-				const modelSelection = model as ModelSelection | undefined;
+				const modelSelection = model as LlmSelectedModel | undefined;
 				const result = await testAgentService.runTest(projectId, prompt, modelSelection);
 				const project = await retrieveProjectById(projectId);
 
@@ -51,7 +44,13 @@ export const testRoutes = async (app: App) => {
 				if (sql) {
 					const { data: expectedData, columns: expectedColumns } = await executeQuery(
 						{ sql_query: sql },
-						{ projectFolder: resolveProjectFolder(project.path!) },
+						{
+							projectFolder: project.path!,
+							chatId: '',
+							agentSettings: null,
+							envVars: {},
+							queryResults: new Map(),
+						},
 					);
 					const { data } = await testAgentService.runVerification(
 						projectId,

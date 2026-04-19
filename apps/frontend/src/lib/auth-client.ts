@@ -8,12 +8,15 @@ export const authClient = createAuthClient({
 				requiresPasswordReset: {
 					type: 'boolean',
 				},
+				messagingProviderCode: {
+					type: 'string',
+				},
 			},
 		}),
 	],
 });
 
-export const { useSession, signIn, signUp, signOut } = authClient;
+export const { useSession, signIn, signUp, signOut, requestPasswordReset, resetPassword } = authClient;
 
 const handleGoogleSignIn = async () => {
 	await authClient.signIn.social({
@@ -23,4 +26,12 @@ const handleGoogleSignIn = async () => {
 	});
 };
 
-export { handleGoogleSignIn };
+const handleGithubSignIn = async () => {
+	await authClient.signIn.social({
+		provider: 'github',
+		callbackURL: '/',
+		errorCallbackURL: '/login',
+	});
+};
+
+export { handleGoogleSignIn, handleGithubSignIn };

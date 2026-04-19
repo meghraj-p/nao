@@ -30,6 +30,9 @@ export type NewProject = typeof sqliteSchema.project.$inferInsert;
 export type DBProjectMember = typeof sqliteSchema.projectMember.$inferSelect;
 export type NewProjectMember = typeof sqliteSchema.projectMember.$inferInsert;
 
+export type DBProjectWhatsappLink = typeof sqliteSchema.projectWhatsappLink.$inferSelect;
+export type NewProjectWhatsappLink = typeof sqliteSchema.projectWhatsappLink.$inferInsert;
+
 export type DBProjectLlmConfig = typeof sqliteSchema.projectLlmConfig.$inferSelect;
 export type NewProjectLlmConfig = typeof sqliteSchema.projectLlmConfig.$inferInsert;
 
@@ -44,5 +47,45 @@ export type NewProjectSavedPrompt = typeof sqliteSchema.projectSavedPrompt.$infe
 
 export type DBMemory = typeof sqliteSchema.memories.$inferSelect;
 export type DBNewMemory = typeof sqliteSchema.memories.$inferInsert;
+
+export type DBSharedChat = typeof sqliteSchema.sharedChat.$inferSelect;
+export type NewSharedChat = typeof sqliteSchema.sharedChat.$inferInsert;
+
+export type DBSharedChatAccess = typeof sqliteSchema.sharedChatAccess.$inferSelect;
+export type NewSharedChatAccess = typeof sqliteSchema.sharedChatAccess.$inferInsert;
+
+export type ChatVisibility = DBSharedChat['visibility'];
+
+export type DBSharedStory = typeof sqliteSchema.sharedStory.$inferSelect;
+export type NewSharedStory = typeof sqliteSchema.sharedStory.$inferInsert;
+
+export type DBSharedStoryAccess = typeof sqliteSchema.sharedStoryAccess.$inferSelect;
+export type NewSharedStoryAccess = typeof sqliteSchema.sharedStoryAccess.$inferInsert;
+
+export type StoryVisibility = DBSharedStory['visibility'];
+
+export type DBStory = typeof sqliteSchema.story.$inferSelect;
+export type NewStory = typeof sqliteSchema.story.$inferInsert;
+
+export type DBStoryVersion = typeof sqliteSchema.storyVersion.$inferSelect;
+export type NewStoryVersion = typeof sqliteSchema.storyVersion.$inferInsert;
+
+export type DBStoryDataCache = typeof sqliteSchema.storyDataCache.$inferSelect;
+export type NewStoryDataCache = typeof sqliteSchema.storyDataCache.$inferInsert;
+
+export type DBProjectProviderBudget = typeof sqliteSchema.projectProviderBudget.$inferSelect;
+export type NewProjectProviderBudget = typeof sqliteSchema.projectProviderBudget.$inferInsert;
+
+export type DBLlmInference = typeof sqliteSchema.llmInference.$inferSelect;
+export type NewLlmInference = typeof sqliteSchema.llmInference.$inferInsert;
+
+export type DBLog = typeof sqliteSchema.log.$inferSelect;
+export type NewLog = typeof sqliteSchema.log.$inferInsert;
+
+export type DBMessageImage = typeof sqliteSchema.messageImage.$inferSelect;
+export type NewMessageImage = typeof sqliteSchema.messageImage.$inferInsert;
+
+export type DBApiKey = typeof sqliteSchema.apiKey.$inferSelect;
+export type NewApiKey = typeof sqliteSchema.apiKey.$inferInsert;
 
 export default allSchema as typeof sqliteSchema;

@@ -11,13 +11,13 @@ from cyclopts import Parameter
 from rich.console import Console
 
 from nao_core import __version__
-from nao_core.config import NaoConfig
+from nao_core.config import NaoConfig, resolve_project_path
+from nao_core.config.llm import PROVIDER_AUTH, LLMProvider
 from nao_core.mode import MODE
 from nao_core.tracking import track_command
 
 console = Console()
 
-# Default port for the nao chat server
 DEFAULT_SERVER_PORT = 5005
 FASTAPI_PORT = 8005
 SECRET_FILE_NAME = ".nao-secret"
@@ -43,10 +43,10 @@ def validate_port(port: int | None) -> int:
 
 def get_server_binary_path() -> Path:
     """Get the path to the bundled nao-chat-server binary."""
-    # The binary is in the bin folder relative to this file
     cli_dir = Path(__file__).parent.parent
     bin_dir = cli_dir / "bin"
-    binary_path = bin_dir / "nao-chat-server"
+    binary_name = "nao-chat-server.exe" if sys.platform == "win32" else "nao-chat-server"
+    binary_path = bin_dir / binary_name
 
     if not binary_path.exists():
         console.print(f"[bold red]✗[/bold red] Server binary not found at {binary_path}")
@@ -122,8 +122,46 @@ def ensure_auth_secret(bin_dir: Path) -> str | None:
         return new_secret
 
 
+def start_ngrok_tunnel(port: int) -> str:
+    """Start an ngrok tunnel and return the public HTTPS URL."""
+    try:
+        from pyngrok import ngrok
+    except ImportError:
+        console.print("[bold red]✗[/bold red] pyngrok is required for --ngrok support")
+        console.print("[dim]Install it with: pip install pyngrok[/dim]")
+        sys.exit(1)
+
+    tunnel = ngrok.connect(str(port), "http")
+    public_url: str | None = tunnel.public_url
+
+    if not public_url:
+        console.print("[bold red]✗[/bold red] ngrok tunnel failed to return a public URL")
+        sys.exit(1)
+
+    assert public_url is not None
+    if public_url.startswith("http://"):
+        public_url = public_url.replace("http://", "https://", 1)
+
+    console.print(f"[bold green]✓[/bold green] ngrok tunnel established: {public_url}")
+    return public_url
+
+
+def stop_ngrok():
+    """Shut down all ngrok tunnels."""
+    try:
+        from pyngrok import ngrok
+
+        ngrok.kill()
+    except Exception:
+        pass
+
+
 @track_command("chat")
-def chat(port: Annotated[Optional[int], Parameter(name=["-p", "--port"])] = None):
+def chat(
+    port: Annotated[Optional[int], Parameter(name=["-p", "--port"])] = None,
+    *,
+    ngrok: Annotated[bool, Parameter(name=["--ngrok"])] = False,
+):
     """Start the nao chat UI.
 
     Launches the nao chat server and opens the web interface in your browser.
@@ -133,12 +171,14 @@ def chat(port: Annotated[Optional[int], Parameter(name=["-p", "--port"])] = None
     port : int
         Sets chat web app port. Defaults to `SERVER_PORT` env var and 5005 if not set.
         Must be different from FASTAPI_PORT (8005).
+    ngrok : bool
+        Start an ngrok tunnel to expose the chat server publicly. Useful for
+        Slack integration workflows. Requires an ngrok account and authtoken.
     """
     console.print("\n[bold cyan]💬 Starting nao chat...[/bold cyan]\n")
 
-    # Try to load nao config from current directory
-    config = NaoConfig.try_load(exit_on_error=True)
-    assert config is not None  # Help type checker after exit_on_error=True
+    config = NaoConfig.try_load(resolve_project_path(), exit_on_error=True)
+    assert config is not None
     console.print(f"[bold green]✓[/bold green] Loaded config from {Path.cwd() / 'nao_config.yaml'}")
 
     binary_path = get_server_binary_path()
@@ -147,12 +187,15 @@ def chat(port: Annotated[Optional[int], Parameter(name=["-p", "--port"])] = None
     console.print(f"[dim]Server binary: {binary_path}[/dim]")
     console.print(f"[dim]Working directory: {bin_dir}[/dim]")
 
-    # Start the server processes
     chat_process = None
     fastapi_process = None
+    ngrok_url = None
 
     def shutdown_servers():
-        """Gracefully shut down both server processes."""
+        """Gracefully shut down server processes and ngrok tunnel."""
+        if ngrok_url:
+            stop_ngrok()
+            console.print("[bold green]✓[/bold green] ngrok tunnel closed")
         for name, proc in (("Chat server", chat_process), ("FastAPI server", fastapi_process)):
             if proc:
                 proc.terminate()
@@ -163,40 +206,70 @@ def chat(port: Annotated[Optional[int], Parameter(name=["-p", "--port"])] = None
                     proc.wait()
 
     try:
-        # Set up environment - inherit from parent but ensure we're in the bin dir
-        # so the server can find the public folder
         env = os.environ.copy()
-
-        # Get chat app port
         port = validate_port(port)
 
-        # Ensure auth secret is available
         auth_secret = ensure_auth_secret(bin_dir)
         if auth_secret:
             env["BETTER_AUTH_SECRET"] = auth_secret
 
-        # Set LLM API key from config if available
         if config and config.llm:
-            env_var_name = f"{config.llm.provider.upper()}_API_KEY"
-            env[env_var_name] = config.llm.api_key
-            console.print(f"[bold green]✓[/bold green] Set {env_var_name} from config")
-            if config.llm.base_url:
-                base_url_var = f"{config.llm.provider.upper()}_BASE_URL"
-                env[base_url_var] = config.llm.base_url
-                console.print(f"[bold green]✓[/bold green] Set {base_url_var} from config")
+            auth = PROVIDER_AUTH[config.llm.provider]
+            if config.llm.api_key is not None and auth.api_key != "none":
+                env[auth.env_var] = config.llm.api_key
+                console.print(f"[bold green]✓[/bold green] Set {auth.env_var} from config")
+            if config.llm.base_url and auth.base_url_env_var:
+                env[auth.base_url_env_var] = config.llm.base_url
+                console.print(f"[bold green]✓[/bold green] Set {auth.base_url_env_var} from config")
 
-        # Set Slack config if available
-        if config and config.slack:
-            env["SLACK_BOT_TOKEN"] = config.slack.bot_token
-            env["SLACK_SIGNING_SECRET"] = config.slack.signing_secret
-            console.print("[bold green]✓[/bold green] Set Slack environment variables from config")
+            if config.llm.provider == LLMProvider.BEDROCK:
+                if config.llm.access_key:
+                    env["AWS_ACCESS_KEY_ID"] = config.llm.access_key
+                    console.print("[bold green]✓[/bold green] Set AWS_ACCESS_KEY_ID from config")
+                if config.llm.secret_key:
+                    env["AWS_SECRET_ACCESS_KEY"] = config.llm.secret_key
+                    console.print("[bold green]✓[/bold green] Set AWS_SECRET_ACCESS_KEY from config")
+                aws_profile = config.llm.aws_profile or os.environ.get("AWS_PROFILE")
+                if aws_profile:
+                    env["AWS_PROFILE"] = aws_profile
+                    console.print("[bold green]✓[/bold green] Set AWS_PROFILE from config")
+                session_token = os.environ.get("AWS_SESSION_TOKEN")
+                if session_token:
+                    env["AWS_SESSION_TOKEN"] = session_token
+                    console.print("[bold green]✓[/bold green] Set AWS_SESSION_TOKEN from environment")
+                if config.llm.aws_region:
+                    env["AWS_REGION"] = config.llm.aws_region
+                    console.print("[bold green]✓[/bold green] Set AWS_REGION from config")
+
+            if config.llm.provider == LLMProvider.VERTEX:
+                if config.llm.gcp_project:
+                    env["GOOGLE_VERTEX_PROJECT"] = config.llm.gcp_project
+                    console.print("[bold green]✓[/bold green] Set GOOGLE_VERTEX_PROJECT from config")
+                if config.llm.gcp_location:
+                    env["GOOGLE_VERTEX_LOCATION"] = config.llm.gcp_location
+                    console.print("[bold green]✓[/bold green] Set GOOGLE_VERTEX_LOCATION from config")
+                if config.llm.service_account_json:
+                    env["VERTEX_GOOGLE_SERVICE_ACCOUNT_JSON"] = config.llm.service_account_json
+                    console.print("[bold green]✓[/bold green] Set VERTEX_GOOGLE_SERVICE_ACCOUNT_JSON from config")
+                if config.llm.key_file:
+                    env["VERTEX_GOOGLE_APPLICATION_CREDENTIALS"] = str(Path(config.llm.key_file).resolve())
+                    console.print("[bold green]✓[/bold green] Set VERTEX_GOOGLE_APPLICATION_CREDENTIALS from config")
 
         env["NAO_DEFAULT_PROJECT_PATH"] = str(Path.cwd())
-        env["BETTER_AUTH_URL"] = f"http://localhost:{port}"
+
+        if config and config.llm and config.llm.annotation_model:
+            env["NAO_ANNOTATION_MODEL"] = config.llm.annotation_model
+            console.print("[bold green]✓[/bold green] Set NAO_ANNOTATION_MODEL from config")
+
+        if ngrok:
+            ngrok_url = start_ngrok_tunnel(port)
+            env["BETTER_AUTH_URL"] = ngrok_url
+        elif "BETTER_AUTH_URL" not in os.environ:
+            env["BETTER_AUTH_URL"] = f"http://localhost:{port}"
+
         env["MODE"] = MODE
         env["NAO_CORE_VERSION"] = __version__
 
-        # Start the FastAPI server first
         fastapi_path = get_fastapi_main_path()
         console.print(f"[dim]FastAPI server: {fastapi_path}[/dim]")
 
@@ -209,13 +282,11 @@ def chat(port: Annotated[Optional[int], Parameter(name=["-p", "--port"])] = None
 
         console.print("[bold green]✓[/bold green] FastAPI server starting...")
 
-        # Wait for FastAPI server to be ready
         if wait_for_server(FASTAPI_PORT):
             console.print(f"[bold green]✓[/bold green] FastAPI server ready at http://localhost:{FASTAPI_PORT}")
         else:
             console.print("[bold yellow]⚠[/bold yellow] FastAPI server is taking longer than expected to start...")
 
-        # Start the chat server
         chat_process = subprocess.Popen(
             [str(binary_path), "--port", str(port)],
             cwd=str(bin_dir),
@@ -223,13 +294,14 @@ def chat(port: Annotated[Optional[int], Parameter(name=["-p", "--port"])] = None
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
 
         console.print("[bold green]✓[/bold green] Chat server starting...")
 
-        # Wait for the chat server to be ready
         if wait_for_server(port):
-            url = f"http://localhost:{port}"
+            url = ngrok_url or f"http://localhost:{port}"
             console.print(f"[bold green]✓[/bold green] Chat server ready at {url}")
             console.print("\n[bold]Opening browser...[/bold]")
             webbrowser.open(url)
@@ -238,13 +310,10 @@ def chat(port: Annotated[Optional[int], Parameter(name=["-p", "--port"])] = None
             console.print("[bold yellow]⚠[/bold yellow] Chat server is taking longer than expected to start...")
             console.print(f"[dim]Check http://localhost:{port} manually[/dim]")
 
-        # Stream chat server output to console
         if chat_process.stdout:
             for line in chat_process.stdout:
-                # Filter out some of the verbose logging if needed
                 console.print(f"[dim]{line.rstrip()}[/dim]")
 
-        # Wait for process to complete
         chat_process.wait()
 
     except KeyboardInterrupt:

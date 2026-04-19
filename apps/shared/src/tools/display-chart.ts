@@ -1,12 +1,22 @@
 import z from 'zod/v3';
 
-export const ChartTypeEnum = z.enum(['bar', 'stacked_bar', 'line', 'pie', 'scatter', 'radar', 'radial_bar']);
+export const ChartTypeEnum = z.enum([
+	'bar',
+	'stacked_bar',
+	'line',
+	'area',
+	'stacked_area',
+	'pie',
+	'kpi_card',
+	'scatter',
+	'radar',
+]);
 
 export const XAxisTypeEnum = z.enum(['date', 'number', 'category']);
 
 export const SeriesConfigSchema = z.object({
 	data_key: z.string().describe('Column name from SQL result to plot.'),
-	color: z.string().describe('CSS color (defaults to theme colors).'),
+	color: z.string().describe('CSS color (defaults to theme colors).').optional(),
 	label: z.string().describe('Label to display in the legend.').optional(),
 });
 
@@ -15,7 +25,7 @@ export const InputSchema = z.object({
 	chart_type: ChartTypeEnum.describe('Type of chart to display.'),
 	x_axis_key: z.string().describe('Column name for X-axis/category labels.'),
 	x_axis_type: XAxisTypeEnum.nullable().describe(
-		'Type of x-axis data for range controls. Use "date" only if values are parseable by JS Date(). Set to null for simple count filtering.',
+		'Use "date" only when x-axis values parse as JS Date (YYYY-MM-DD). Use "category" for quarter_ending, fiscal periods, or labels. Use "number" for numeric x-axis.',
 	),
 	series: z
 		.array(SeriesConfigSchema)

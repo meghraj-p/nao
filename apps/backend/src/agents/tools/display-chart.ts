@@ -10,8 +10,7 @@ export default tool<displayChart.Input, displayChart.Output>({
 	outputSchema: displayChart.OutputSchema,
 
 	execute: async ({ chart_type: chartType, x_axis_key: xAxisKey, series }) => {
-		const needsXAxis = ['bar', 'line', 'scatter', 'radar', 'radial_bar'];
-		if (needsXAxis.includes(chartType) && !xAxisKey) {
+		if (['bar', 'line', 'area', 'stacked_area', 'scatter', 'radar'].includes(chartType) && !xAxisKey) {
 			return { _version: '1', success: false, error: `xAxisKey is required for ${chartType} charts.` };
 		}
 
@@ -23,8 +22,13 @@ export default tool<displayChart.Input, displayChart.Output>({
 			return { _version: '1', success: false, error: 'Pie charts require exactly one series.' };
 		}
 
-		if (chartType === 'radial_bar' && series.length !== 1) {
-			return { _version: '1', success: false, error: 'Radial bar charts require exactly one series.' };
+		// Stacked charts require at least two series
+		if ((chartType === 'stacked_bar' || chartType === 'stacked_area') && series.length < 2) {
+			return {
+				_version: '1',
+				success: false,
+				error: `Stacked ${chartType === 'stacked_bar' ? 'bar' : 'area'} chart requires at least two series. You may need to pivot the data to create a series for each stack.`,
+			};
 		}
 
 		// TODO: check that the chart is displayable and that the data is valid

@@ -1,13 +1,16 @@
+import type { LlmProvider } from '@nao/shared/types';
+import { BUDGET_PERIODS, SHARE_VISIBILITY, USER_ROLES } from '@nao/shared/types';
 import { type ProviderMetadata } from 'ai';
 import { sql } from 'drizzle-orm';
 import { check, index, integer, primaryKey, sqliteTable, text, unique } from 'drizzle-orm/sqlite-core';
 
 import { AgentSettings } from '../types/agent-settings';
-import { StopReason, ToolState, UIMessagePartType } from '../types/chat';
-import { LlmProvider } from '../types/llm';
+import { ForkMetadata, StopReason, ToolState, UIMessagePartType } from '../types/chat';
+import { LLM_INFERENCE_TYPES } from '../types/llm';
+import { LOG_LEVELS, LOG_SOURCES } from '../types/log';
+import { MEMORY_CATEGORIES } from '../types/memory';
+import { SlackSettings, TeamsSettings, TelegramSettings, WhatsappSettings } from '../types/messaging-provider';
 import { ORG_ROLES } from '../types/organization';
-import { USER_ROLES } from '../types/project';
-import { MEMORY_CATEGORIES } from '../utils/memory';
 
 export const user = sqliteTable('user', {
 	id: text('id').primaryKey(),
@@ -17,6 +20,8 @@ export const user = sqliteTable('user', {
 	image: text('image'),
 	requiresPasswordReset: integer('requires_password_reset', { mode: 'boolean' }).default(false).notNull(),
 	memoryEnabled: integer('memory_enabled', { mode: 'boolean' }).default(true).notNull(),
+	messagingProviderCode: text('messaging_provider_code').unique(),
+	githubAccessToken: text('github_access_token'),
 	createdAt: integer('created_at', { mode: 'timestamp_ms' })
 		.default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
 		.notNull(),
@@ -142,11 +147,17 @@ export const project = sqliteTable(
 		name: text('name').notNull(),
 		type: text('type', { enum: ['local'] }).notNull(),
 		path: text('path'),
-		slackBotToken: text('slack_bot_token'),
-		slackSigningSecret: text('slack_signing_secret'),
 		agentSettings: text('agent_settings', { mode: 'json' }).$type<AgentSettings>(),
 		enabledMcpTools: text('enabled_tools', { mode: 'json' }).$type<string[]>().notNull().default([]),
 		knownMcpServers: text('known_mcp_servers', { mode: 'json' }).$type<string[]>().notNull().default([]),
+
+		envVars: text('env_vars', { mode: 'json' }).$type<Record<string, string>>().notNull().default({}),
+
+		slackSettings: text('slack_settings', { mode: 'json' }).$type<SlackSettings>(),
+		teamsSettings: text('teams_settings', { mode: 'json' }).$type<TeamsSettings>(),
+		telegramSettings: text('telegram_settings', { mode: 'json' }).$type<TelegramSettings>(),
+		whatsappSettings: text('whatsapp_settings', { mode: 'json' }).$type<WhatsappSettings>(),
+
 		createdAt: integer('created_at', { mode: 'timestamp_ms' })
 			.default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
 			.notNull(),
@@ -156,11 +167,32 @@ export const project = sqliteTable(
 			.notNull(),
 	},
 	(t) => [
-		check(
-			'local_project_path_required',
-			sql`CASE WHEN ${t.type} = 'local' THEN ${t.path} IS NOT NULL ELSE TRUE END`,
-		),
+		check('local_project_path_required', sql`CASE WHEN "type" = 'local' THEN "path" IS NOT NULL ELSE TRUE END`),
 		index('project_orgId_idx').on(t.orgId),
+	],
+);
+
+export const projectWhatsappLink = sqliteTable(
+	'project_whatsapp_link',
+	{
+		projectId: text('project_id')
+			.notNull()
+			.references(() => project.id, { onDelete: 'cascade' }),
+		whatsappUserId: text('whatsapp_user_id').notNull(),
+		userId: text('user_id')
+			.notNull()
+			.references(() => user.id, { onDelete: 'cascade' }),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' })
+			.default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+			.notNull(),
+		updatedAt: integer('updated_at', { mode: 'timestamp_ms' })
+			.default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+			.$onUpdate(() => new Date())
+			.notNull(),
+	},
+	(t) => [
+		primaryKey({ columns: [t.projectId, t.whatsappUserId] }),
+		index('project_whatsapp_link_userId_idx').on(t.userId),
 	],
 );
 
@@ -177,7 +209,13 @@ export const chat = sqliteTable(
 			.notNull()
 			.references(() => project.id, { onDelete: 'cascade' }),
 		title: text('title').notNull().default('New Conversation'),
+		isStarred: integer('is_starred', { mode: 'boolean' }).default(false).notNull(),
+		deletedAt: integer('deleted_at', { mode: 'timestamp_ms' }),
 		slackThreadId: text('slack_thread_id'),
+		teamsThreadId: text('teams_thread_id'),
+		telegramThreadId: text('telegram_thread_id'),
+		whatsappThreadId: text('whatsapp_thread_id'),
+		forkMetadata: text('fork_metadata', { mode: 'json' }).$type<ForkMetadata>(),
 		createdAt: integer('created_at', { mode: 'timestamp_ms' })
 			.default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
 			.notNull(),
@@ -190,6 +228,9 @@ export const chat = sqliteTable(
 		index('chat_userId_idx').on(table.userId),
 		index('chat_projectId_idx').on(table.projectId),
 		index('chat_slack_thread_idx').on(table.slackThreadId),
+		index('chat_teams_thread_idx').on(table.teamsThreadId),
+		index('chat_telegram_thread_idx').on(table.telegramThreadId),
+		index('chat_whatsapp_thread_idx').on(table.whatsappThreadId),
 	],
 );
 
@@ -207,6 +248,9 @@ export const chatMessage = sqliteTable(
 		errorMessage: text('error_message'),
 		llmProvider: text('llm_provider').$type<LlmProvider>(),
 		llmModelId: text('llm_model_id'),
+		supersededAt: integer('superseded_at', { mode: 'timestamp_ms' }),
+		source: text('source', { enum: ['slack', 'teams', 'telegram', 'whatsapp', 'web'] }),
+		isForked: integer('isForked', { mode: 'boolean' }),
 		createdAt: integer('created_at', { mode: 'timestamp_ms' })
 			.default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
 			.notNull(),
@@ -247,7 +291,7 @@ export const messagePart = sqliteTable(
 		reasoningText: text('reasoning_text'),
 
 		// tool call columns
-		toolCallId: text('tool_call_id'),
+		toolCallId: text('tool_call_id').unique(),
 		toolName: text('tool_name'),
 		toolState: text('tool_state').$type<ToolState>(),
 		toolErrorText: text('tool_error_text'),
@@ -264,22 +308,24 @@ export const messagePart = sqliteTable(
 		// provider metadata columns
 		toolProviderMetadata: text('tool_provider_metadata', { mode: 'json' }).$type<ProviderMetadata>(),
 		providerMetadata: text('provider_metadata', { mode: 'json' }).$type<ProviderMetadata>(),
+
+		// file/image columns
+		mediaType: text('media_type'),
+		imageId: text('image_id').references(() => messageImage.id, { onDelete: 'set null' }),
 	},
 	(t) => [
 		index('parts_message_id_idx').on(t.messageId),
 		index('parts_message_id_order_idx').on(t.messageId, t.order),
-		check(
-			'text_required_if_type_is_text',
-			sql`CASE WHEN ${t.type} = 'text' THEN ${t.text} IS NOT NULL ELSE TRUE END`,
-		),
+		check('text_required_if_type_is_text', sql`CASE WHEN type = 'text' THEN text IS NOT NULL ELSE TRUE END`),
 		check(
 			'reasoning_text_required_if_type_is_reasoning',
-			sql`CASE WHEN ${t.type} = 'reasoning' THEN ${t.reasoningText} IS NOT NULL ELSE TRUE END`,
+			sql`CASE WHEN type = 'reasoning' THEN reasoning_text IS NOT NULL ELSE TRUE END`,
 		),
 		check(
 			'tool_call_fields_required',
-			sql`CASE WHEN ${t.type} LIKE 'tool-%' THEN ${t.toolCallId} IS NOT NULL AND ${t.toolState} IS NOT NULL ELSE TRUE END`,
+			sql`CASE WHEN type LIKE 'tool-%' THEN tool_call_id IS NOT NULL AND tool_state IS NOT NULL ELSE TRUE END`,
 		),
+		check('file_fields_required', sql`CASE WHEN type = 'file' THEN media_type IS NOT NULL ELSE TRUE END`),
 	],
 );
 
@@ -326,6 +372,7 @@ export const projectLlmConfig = sqliteTable(
 			.references(() => project.id, { onDelete: 'cascade' }),
 		provider: text('provider').$type<LlmProvider>().notNull(),
 		apiKey: text('api_key').notNull(),
+		credentials: text('credentials', { mode: 'json' }).$type<Record<string, string>>(),
 		enabledModels: text('enabled_models', { mode: 'json' }).$type<string[]>().default([]).notNull(),
 		baseUrl: text('base_url'),
 		createdAt: integer('created_at', { mode: 'timestamp_ms' })
@@ -340,6 +387,103 @@ export const projectLlmConfig = sqliteTable(
 		index('project_llm_config_projectId_idx').on(t.projectId),
 		unique('project_llm_config_project_provider').on(t.projectId, t.provider),
 	],
+);
+
+export const projectProviderBudget = sqliteTable(
+	'project_provider_budget',
+	{
+		id: text('id')
+			.$defaultFn(() => crypto.randomUUID())
+			.primaryKey(),
+		projectId: text('project_id')
+			.notNull()
+			.references(() => project.id, { onDelete: 'cascade' }),
+		provider: text('provider').$type<LlmProvider>().notNull(),
+		limitUsd: integer('limit_usd').notNull(),
+		period: text('period', { enum: BUDGET_PERIODS }).notNull(),
+		currentPeriodStart: integer('current_period_start', { mode: 'timestamp_ms' })
+			.default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+			.notNull(),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' })
+			.default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+			.notNull(),
+		notifiedAt: integer('notified_at', { mode: 'timestamp_ms' }),
+		updatedAt: integer('updated_at', { mode: 'timestamp_ms' })
+			.default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+			.$onUpdate(() => new Date())
+			.notNull(),
+	},
+	(t) => [
+		index('project_provider_budget_projectId_idx').on(t.projectId),
+		unique('project_provider_budget_project_provider').on(t.projectId, t.provider),
+		check('budget_period_valid', sql.raw(`period IN (${BUDGET_PERIODS.map((p) => `'${p}'`).join(', ')})`)),
+	],
+);
+
+export const sharedChat = sqliteTable(
+	'shared_chat',
+	{
+		id: text('id')
+			.$defaultFn(() => crypto.randomUUID())
+			.primaryKey(),
+		chatId: text('chat_id')
+			.notNull()
+			.references(() => chat.id, { onDelete: 'cascade' }),
+		visibility: text('visibility', { enum: SHARE_VISIBILITY }).default('project').notNull(),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' })
+			.default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+			.notNull(),
+	},
+	(t) => [unique('shared_chat_chatId_unique').on(t.chatId)],
+);
+
+export const sharedChatAccess = sqliteTable(
+	'shared_chat_access',
+	{
+		sharedChatId: text('shared_chat_id')
+			.notNull()
+			.references(() => sharedChat.id, { onDelete: 'cascade' }),
+		userId: text('user_id')
+			.notNull()
+			.references(() => user.id, { onDelete: 'cascade' }),
+	},
+	(t) => [primaryKey({ columns: [t.sharedChatId, t.userId] })],
+);
+
+export const sharedStory = sqliteTable(
+	'shared_story',
+	{
+		id: text('id')
+			.$defaultFn(() => crypto.randomUUID())
+			.primaryKey(),
+		storyId: text('story_id')
+			.notNull()
+			.references(() => story.id, { onDelete: 'cascade' }),
+		projectId: text('project_id')
+			.notNull()
+			.references(() => project.id, { onDelete: 'cascade' }),
+		userId: text('user_id')
+			.notNull()
+			.references(() => user.id, { onDelete: 'cascade' }),
+		visibility: text('visibility', { enum: SHARE_VISIBILITY }).default('project').notNull(),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' })
+			.default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+			.notNull(),
+	},
+	(t) => [index('shared_story_projectId_idx').on(t.projectId), index('shared_story_storyId_idx').on(t.storyId)],
+);
+
+export const sharedStoryAccess = sqliteTable(
+	'shared_story_access',
+	{
+		sharedStoryId: text('shared_story_id')
+			.notNull()
+			.references(() => sharedStory.id, { onDelete: 'cascade' }),
+		userId: text('user_id')
+			.notNull()
+			.references(() => user.id, { onDelete: 'cascade' }),
+	},
+	(t) => [primaryKey({ columns: [t.sharedStoryId, t.userId] })],
 );
 
 export const projectSavedPrompt = sqliteTable(
@@ -364,6 +508,73 @@ export const projectSavedPrompt = sqliteTable(
 	(t) => [index('project_saved_prompt_projectId_idx').on(t.projectId)],
 );
 
+export const STORY_ACTIONS = ['create', 'update', 'replace'] as const;
+export const STORY_SOURCES = ['assistant', 'user'] as const;
+
+export const story = sqliteTable(
+	'story',
+	{
+		id: text('id')
+			.$defaultFn(() => crypto.randomUUID())
+			.primaryKey(),
+		chatId: text('chat_id')
+			.notNull()
+			.references(() => chat.id, { onDelete: 'cascade' }),
+		slug: text('slug').notNull(),
+		title: text('title').notNull(),
+		isLive: integer('is_live', { mode: 'boolean' }).default(false).notNull(),
+		isLiveTextDynamic: integer('is_live_text_dynamic', { mode: 'boolean' }).default(true).notNull(),
+		cacheSchedule: text('cache_schedule'),
+		cacheScheduleDescription: text('cache_schedule_description'),
+		archivedAt: integer('archived_at', { mode: 'timestamp_ms' }),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' })
+			.default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+			.notNull(),
+		updatedAt: integer('updated_at', { mode: 'timestamp_ms' })
+			.default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+			.$onUpdate(() => new Date())
+			.notNull(),
+	},
+	(t) => [unique('story_chat_slug_unique').on(t.chatId, t.slug), index('story_chatId_idx').on(t.chatId)],
+);
+
+export const storyVersion = sqliteTable(
+	'story_version',
+	{
+		id: text('id')
+			.$defaultFn(() => crypto.randomUUID())
+			.primaryKey(),
+		storyId: text('story_id')
+			.notNull()
+			.references(() => story.id, { onDelete: 'cascade' }),
+		version: integer('version').notNull(),
+		code: text('code').notNull(),
+		action: text('action', { enum: STORY_ACTIONS }).notNull(),
+		source: text('source', { enum: STORY_SOURCES }).notNull(),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' })
+			.default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+			.notNull(),
+	},
+	(t) => [
+		index('story_version_storyId_idx').on(t.storyId),
+		unique('story_version_story_version_unique').on(t.storyId, t.version),
+	],
+);
+
+export const storyDataCache = sqliteTable('story_data_cache', {
+	storyId: text('story_id')
+		.notNull()
+		.references(() => story.id, { onDelete: 'cascade' })
+		.primaryKey(),
+	queryData: text('query_data', { mode: 'json' })
+		.$type<Record<string, { data: unknown[]; columns: string[] }>>()
+		.notNull(),
+	analysisResults: text('analysis_results', { mode: 'json' }).$type<Record<string, string>>(),
+	cachedAt: integer('cached_at', { mode: 'timestamp_ms' })
+		.default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+		.notNull(),
+});
+
 export const memories = sqliteTable(
 	'memories',
 	{
@@ -383,6 +594,116 @@ export const memories = sqliteTable(
 			.$onUpdate(() => new Date())
 			.notNull(),
 		chatId: text('chat_id').references(() => chat.id, { onDelete: 'set null' }),
+		supersededBy: text('superseded_by'),
 	},
-	(t) => [index('memories_userId_idx').on(t.userId), index('memories_chatId_idx').on(t.chatId)],
+	(t) => [
+		index('memories_userId_idx').on(t.userId),
+		index('memories_chatId_idx').on(t.chatId),
+		index('memories_supersededBy_idx').on(t.supersededBy),
+	],
+);
+
+export const llmInference = sqliteTable(
+	'llm_inference',
+	{
+		id: text('id')
+			.$defaultFn(() => crypto.randomUUID())
+			.primaryKey(),
+		projectId: text('project_id')
+			.notNull()
+			.references(() => project.id, { onDelete: 'cascade' }),
+		userId: text('user_id')
+			.notNull()
+			.references(() => user.id, { onDelete: 'cascade' }),
+		chatId: text('chat_id').references(() => chat.id, { onDelete: 'set null' }),
+		type: text('type', { enum: LLM_INFERENCE_TYPES }).notNull(),
+		llmProvider: text('llm_provider').$type<LlmProvider>().notNull(),
+		llmModelId: text('llm_model_id').notNull(),
+
+		// Token usage
+		inputTotalTokens: integer('input_total_tokens'),
+		inputNoCacheTokens: integer('input_no_cache_tokens'),
+		inputCacheReadTokens: integer('input_cache_read_tokens'),
+		inputCacheWriteTokens: integer('input_cache_write_tokens'),
+		outputTotalTokens: integer('output_total_tokens'),
+		outputTextTokens: integer('output_text_tokens'),
+		outputReasoningTokens: integer('output_reasoning_tokens'),
+		totalTokens: integer('total_tokens'),
+
+		createdAt: integer('created_at', { mode: 'timestamp_ms' })
+			.default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+			.notNull(),
+	},
+	(t) => [
+		index('llm_inference_projectId_idx').on(t.projectId),
+		index('llm_inference_userId_idx').on(t.userId),
+		index('llm_inference_type_idx').on(t.type),
+	],
+);
+
+export const messageImage = sqliteTable('message_image', {
+	id: text('id')
+		.$defaultFn(() => crypto.randomUUID())
+		.primaryKey(),
+	data: text('data').notNull(),
+	mediaType: text('media_type').notNull(),
+	createdAt: integer('created_at', { mode: 'timestamp_ms' })
+		.default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+		.notNull(),
+});
+
+export const message_part_chart_image = sqliteTable('chart_image', {
+	id: text('id')
+		.$defaultFn(() => crypto.randomUUID())
+		.primaryKey(),
+	toolCallId: text('tool_call_id').notNull().unique(),
+	data: text('data').notNull(),
+	createdAt: integer('created_at', { mode: 'timestamp_ms' })
+		.default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+		.notNull(),
+});
+
+export const apiKey = sqliteTable(
+	'api_key',
+	{
+		id: text('id')
+			.$defaultFn(() => crypto.randomUUID())
+			.primaryKey(),
+		orgId: text('org_id')
+			.notNull()
+			.references(() => organization.id, { onDelete: 'cascade' }),
+		name: text('name').notNull(),
+		keyHash: text('key_hash').notNull().unique(),
+		keyPrefix: text('key_prefix').notNull(),
+		createdBy: text('created_by')
+			.notNull()
+			.references(() => user.id, { onDelete: 'cascade' }),
+		lastUsedAt: integer('last_used_at', { mode: 'timestamp_ms' }),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' })
+			.default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+			.notNull(),
+	},
+	(t) => [index('api_key_orgId_idx').on(t.orgId)],
+);
+
+export const log = sqliteTable(
+	'log',
+	{
+		id: text('id')
+			.$defaultFn(() => crypto.randomUUID())
+			.primaryKey(),
+		level: text('level', { enum: LOG_LEVELS }).notNull(),
+		message: text('message').notNull(),
+		context: text('context', { mode: 'json' }).$type<Record<string, unknown>>(),
+		source: text('source', { enum: LOG_SOURCES }).notNull(),
+		projectId: text('project_id').references(() => project.id, { onDelete: 'cascade' }),
+		createdAt: integer('created_at', { mode: 'timestamp_ms' })
+			.default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+			.notNull(),
+	},
+	(t) => [
+		index('log_createdAt_idx').on(t.createdAt),
+		index('log_level_idx').on(t.level),
+		index('log_projectId_idx').on(t.projectId),
+	],
 );

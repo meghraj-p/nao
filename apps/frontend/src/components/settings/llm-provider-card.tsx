@@ -1,12 +1,13 @@
 import { Pencil, Trash2 } from 'lucide-react';
-import { getDefaultModelId } from '@nao/backend/providers';
+import { getDefaultModelId, getProviderAuth } from '@nao/backend/provider-meta';
 import { LlmProviderIcon } from '../ui/llm-provider-icon';
-import type { LlmProvider } from '@nao/backend/llm';
+import type { LlmProvider } from '@nao/shared/types';
 import { Button } from '@/components/ui/button';
 
 interface ProviderCardProps {
 	provider: LlmProvider;
 	apiKeyPreview?: string | null;
+	credentialPreviews?: Record<string, string> | null;
 	baseUrl?: string | null;
 	envBaseUrl?: string;
 	enabledModels?: string[] | null;
@@ -22,6 +23,7 @@ interface ProviderCardProps {
 export function ProviderCard({
 	provider,
 	apiKeyPreview,
+	credentialPreviews,
 	baseUrl,
 	envBaseUrl,
 	enabledModels,
@@ -46,9 +48,15 @@ export function ProviderCard({
 							</span>
 						)}
 					</div>
-					{apiKeyPreview ? (
-						<div className='flex items-center gap-2 text-xs text-muted-foreground'>
-							<span className='font-mono'>{apiKeyPreview}</span>
+					{apiKeyPreview || credentialPreviews ? (
+						<div className='flex items-center gap-2 text-xs text-muted-foreground flex-wrap'>
+							{apiKeyPreview && <span className='font-mono'>{apiKeyPreview}</span>}
+							{credentialPreviews &&
+								Object.entries(credentialPreviews).map(([key, preview]) => (
+									<span key={key} className='font-mono'>
+										{key}: {preview}
+									</span>
+								))}
 							{(baseUrl || envBaseUrl) && (
 								<>
 									<span className='text-border'>•</span>
@@ -60,7 +68,13 @@ export function ProviderCard({
 						</div>
 					) : (
 						<div className='flex items-center gap-2 text-xs text-muted-foreground'>
-							<span>API key from environment</span>
+							<span>
+								{getProviderAuth(provider).apiKey === 'required'
+									? 'API key from environment'
+									: getProviderAuth(provider).apiKey === 'optional'
+										? 'Using credentials from environment'
+										: 'No API key required'}
+							</span>
 							{envBaseUrl && (
 								<>
 									<span className='text-border'>•</span>

@@ -3,12 +3,9 @@ import { Streamdown } from 'streamdown';
 import { Code, Copy, Terminal } from 'lucide-react';
 import { ToolCallWrapper } from './tool-call-wrapper';
 import type { ToolCallComponentProps } from '.';
-import { isToolSettled } from '@/lib/ai';
-import { useDebounceValue } from '@/hooks/use-debounce-value';
+import { useToolCallContext } from '@/contexts/tool-call';
 
 type ViewMode = 'output' | 'code';
-
-const DEBOUNCE_MS = 400;
 
 const formatOutput = (value: unknown): string => {
 	if (value === null) {
@@ -23,21 +20,9 @@ const formatOutput = (value: unknown): string => {
 	return `\`\`\`bash\n${String(value)}\n\`\`\``;
 };
 
-export const ExecutePythonToolCall = React.memo(function ExecutePythonToolCall({
-	toolPart,
-}: ToolCallComponentProps<'execute_python'>) {
+export const ExecutePythonToolCall = ({ toolPart: { output, input } }: ToolCallComponentProps<'execute_python'>) => {
 	const [viewMode, setViewMode] = useState<ViewMode>('output');
-	const input = toolPart.input;
-	const output = toolPart.output;
-	const isSettled = isToolSettled(toolPart);
-	const isInputStreaming = toolPart.state === 'input-streaming';
-
-	const code = input?.code ?? '';
-	const debouncedCode = useDebounceValue(code, {
-		delay: DEBOUNCE_MS,
-		skipDebounce: () => !isInputStreaming,
-	});
-	const displayCode = isInputStreaming ? debouncedCode : code;
+	const { isSettled } = useToolCallContext();
 
 	const actions = [
 		{
@@ -61,10 +46,9 @@ export const ExecutePythonToolCall = React.memo(function ExecutePythonToolCall({
 		},
 	];
 
-	const codePreview = displayCode ? (displayCode.length > 50 ? `${displayCode.slice(0, 50)}...` : displayCode) : '';
-	const titleContent = isInputStreaming ? (
-		<span>{isSettled ? 'Ran Python' : 'Running Python'}…</span>
-	) : (
+	const code = input?.code ?? '';
+	const codePreview = code ? (code.length > 50 ? `${code.slice(0, 50)}...` : code) : '';
+	const titleContent = (
 		<span>
 			{isSettled ? 'Ran Python' : 'Running Python'}{' '}
 			<span className='text-xs font-normal truncate'>{codePreview.replace(/\n/g, ' ')}</span>
@@ -78,21 +62,14 @@ export const ExecutePythonToolCall = React.memo(function ExecutePythonToolCall({
 			title={titleContent}
 			actions={isSettled ? actions : []}
 		>
-			{viewMode === 'code' && displayCode ? (
+			{viewMode === 'code' && code ? (
 				<div className='overflow-auto max-h-80 hide-code-header'>
-					{isInputStreaming ? (
-						<pre className='p-3 text-sm font-mono overflow-auto'>
-							<code>{displayCode}</code>
-						</pre>
-					) : (
-						<Streamdown mode='static' controls={{ code: false }}>
-							{`\`\`\`python\n${displayCode}\n\`\`\``}
-						</Streamdown>
-					)}
+					<Streamdown mode='static' controls={{ code: false }}>
+						{`\`\`\`python\n${code}\n\`\`\``}
+					</Streamdown>
 				</div>
 			) : output ? (
 				<div className='overflow-auto max-h-80'>
-					{/* Output value */}
 					<div>
 						<pre className='font-mono text-sm rounded overflow-auto hide-code-header'>
 							<Streamdown mode='static' controls={{ code: false }}>
@@ -106,4 +83,4 @@ export const ExecutePythonToolCall = React.memo(function ExecutePythonToolCall({
 			)}
 		</ToolCallWrapper>
 	);
-});
+};

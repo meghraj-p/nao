@@ -1,67 +1,51 @@
-import { ChevronDown } from 'lucide-react';
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useParams, Link } from '@tanstack/react-router';
+import { Link } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
-import { Prompt } from 'prompt-mentions';
-import { ChatButton, MicButton } from './ui/button';
-import { SlidingWaveform } from './sliding-waveform';
-
-import type { PromptTheme, PromptHandle, SelectedMention } from 'prompt-mentions';
-import 'prompt-mentions/style.css';
+import { Plus, PencilRuler, Database, Image as ImageIcon, AlertTriangle } from 'lucide-react';
+import { Button, ChatButton, MicButton } from './ui/button';
+import { SlidingWaveform } from './chat-input-sliding-waveform';
+import { ChatPrompt, STORY_MENTION_ID, DATABASE_MENTION_TRIGGER } from './chat-input-prompt';
+import { ChatInputModelSelect } from './chat-input-model-select';
+import { ChatInputMessageQueue } from './chat-input-message-queue';
+import { ChatInputImagePreview } from './chat-input-image-preview';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from './ui/dropdown-menu';
+import StoryIcon from './ui/story-icon';
+import type { PromptHandle, SelectedMention } from 'prompt-mentions';
 import type { FormEvent } from 'react';
+import type { AgentHelpers } from '@/hooks/use-agent';
+import { ContextWindowRing } from '@/components/ui/chat-input-context-window-ring';
 
 import { InputGroup, InputGroupAddon } from '@/components/ui/input-group';
-import {
-	DropdownMenu,
-	DropdownMenuItem,
-	DropdownMenuGroup,
-	DropdownMenuContent,
-	DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import { trpc } from '@/main';
 import { useAgentContext } from '@/contexts/agent.provider';
-import { LlmProviderIcon } from '@/components/ui/llm-provider-icon';
 import { useRegisterSetChatInputCallback } from '@/contexts/set-chat-input-callback';
-import { capitalize } from '@/lib/utils';
 import { useTranscribe } from '@/hooks/use-transcribe';
+import { useImageUpload } from '@/hooks/use-image-upload';
+import { parseBudgetError } from '@/lib/ai';
+import { cn } from '@/lib/utils';
+import { useChatId } from '@/hooks/use-chat-id';
+import { messageQueueStore } from '@/stores/chat-message-queue';
+
+type ChatInputBaseProps = {
+	promptRef: React.RefObject<PromptHandle | null>;
+	className?: string;
+	placeholder?: string;
+	initialText?: string;
+	onCancel?: () => void;
+	onSubmitMessage: AgentHelpers['queueOrSendMessage'];
+	allowQueueing?: boolean;
+};
+
+type ChatInputInlineProps = {
+	className?: string;
+	initialText: string;
+	onCancel?: () => void;
+	onSubmitMessage: AgentHelpers['queueOrSendMessage'];
+};
 
 export function ChatInput() {
-	const [hasInput, setHasInput] = useState(false);
 	const promptRef = useRef<PromptHandle>(null);
-	const { sendMessage, isRunning, stopAgent, isLoadingMessages, selectedModel, setSelectedModel, setMentions } =
-		useAgentContext();
-	const chatId = useParams({ strict: false, select: (p) => p.chatId });
-	const availableModels = useQuery(trpc.project.getAvailableModels.queryOptions());
-	const knownModels = useQuery(trpc.project.getKnownModels.queryOptions());
-	const skills = useQuery(trpc.skill.list.queryOptions());
-	const agentSettings = useQuery(trpc.project.getAgentSettings.queryOptions());
-	const transcribeModels = useQuery(trpc.project.getKnownTranscribeModels.queryOptions());
-	const isTranscribeEnabled = agentSettings.data?.transcribe?.enabled ?? false;
-	const hasTranscribeProvider = Object.values(transcribeModels.data ?? {}).some((p) => p.hasKey);
-	const isTranscribeReady = isTranscribeEnabled && hasTranscribeProvider;
-
-	const [micWarning, setMicWarning] = useState(false);
-	const micWarningTimer = useRef(0);
-
-	const showMicWarning = useCallback(() => {
-		setMicWarning(true);
-		window.clearTimeout(micWarningTimer.current);
-		micWarningTimer.current = window.setTimeout(() => setMicWarning(false), 5000);
-	}, []);
-
-	const onTranscribed = useCallback(
-		(text: string) => {
-			if (isRunning) {
-				return;
-			}
-			sendMessage({ text });
-		},
-		[sendMessage, isRunning],
-	);
-
-	const { state: transcribeState, toggle: toggleRecording, analyserRef } = useTranscribe(onTranscribed);
-	const isRecording = transcribeState === 'recording';
-	const isTranscribing = transcribeState === 'transcribing';
+	const { queueOrSendMessage } = useAgentContext();
 
 	useRegisterSetChatInputCallback((text) => {
 		promptRef.current?.clear();
@@ -69,169 +53,397 @@ export function ChatInput() {
 		promptRef.current?.focus();
 	});
 
-	useEffect(() => promptRef.current?.focus(), [chatId]);
+	return <ChatInputBase promptRef={promptRef} onSubmitMessage={queueOrSendMessage} allowQueueing />;
+}
 
-	// Set default model when available models load, or reset if current selection is no longer available
-	useEffect(() => {
-		if (!availableModels.data || availableModels.data.length === 0) {
-			return;
-		}
-
-		const isCurrentSelectionValid =
-			selectedModel &&
-			availableModels.data.some(
-				(m) => m.provider === selectedModel.provider && m.modelId === selectedModel.modelId,
-			);
-
-		if (!isCurrentSelectionValid) {
-			setSelectedModel(availableModels.data[0]);
-		}
-	}, [availableModels.data, selectedModel, setSelectedModel]);
-
-	const submit = (text: string, currentMentions: SelectedMention[]) => {
-		const trimmedInput = text.trim();
-		if (!trimmedInput || isRunning) {
-			return;
-		}
-		setMentions(currentMentions.map((m) => ({ id: m.id, label: m.label, trigger: m.trigger })));
-		sendMessage({ text: trimmedInput });
-		promptRef.current?.clear();
-	};
-
-	const handleSubmit = (e: FormEvent) => {
-		e.preventDefault();
-		const value = promptRef.current?.getValue() ?? '';
-		const mentions = promptRef.current?.getMentions() ?? [];
-		submit(value, mentions);
-	};
-
-	const getModelDisplayName = (provider: string, modelId: string) => {
-		const models = knownModels.data?.[provider as 'openai' | 'anthropic'] ?? [];
-		const model = models.find((m) => m.id === modelId);
-		return model?.name ?? modelId;
-	};
-
-	const models = availableModels.data ?? [];
-	const hasMultipleModels = models.length > 1;
-
-	const theme: PromptTheme = {
-		backgroundColor: 'transparent',
-		placeholderColor: 'var(--color-muted-foreground)',
-		borderColor: 'transparent',
-		focusBorderColor: 'transparent',
-		focusBoxShadow: 'none',
-		minHeight: '60px',
-		color: 'var(--color-foreground)',
-		padding: '12px',
-		fontFamily: 'inherit',
-		menu: {
-			minWidth: '400px',
-			backgroundColor: 'var(--popover)',
-			borderColor: 'var(--border)',
-			color: 'var(--popover-foreground)',
-			itemHoverColor: 'var(--accent)',
-		},
-		pill: {
-			backgroundColor: 'var(--accent)',
-			color: 'var(--accent-foreground)',
-			padding: 'calc(var(--spacing) * 0.4) calc(var(--spacing) * 1.2)',
-			borderRadius: 'var(--radius-sm)',
-		},
-	};
+export function ChatInputInline({ className, initialText, onCancel, onSubmitMessage }: ChatInputInlineProps) {
+	const promptRef = useRef<PromptHandle>(null);
 
 	return (
-		<div className='p-4 pt-0 max-w-3xl w-full mx-auto'>
-			<form onSubmit={handleSubmit} className='mx-auto relative'>
-				<InputGroup htmlFor='chat-input'>
-					<Prompt
-						ref={promptRef}
-						placeholder='Ask anything about your data...'
-						mentionConfigs={[
-							{
-								trigger: '/',
-								menuPosition: 'above',
-								options:
-									(skills.data &&
-										skills.data.map((s) => ({
-											id: s.name,
-											label: capitalize(s.name.replace(/-/g, ' ')),
-											labelRight: s.description,
-										}))) ||
-									[],
-							},
-						]}
-						onChange={(value) => setHasInput(!!value.trim())}
-						onEnter={(value, mentions) => submit(value, mentions)}
-						className='w-full nao-input'
-						theme={theme}
-					/>
-					<InputGroupAddon align='block-end'>
-						{(!isTranscribeReady || (!isRecording && !isTranscribing)) && models.length > 0 && (
-							<DropdownMenu>
-								<DropdownMenuTrigger asChild disabled={!hasMultipleModels}>
-									<button
-										type='button'
-										className={`
-											flex items-center gap-1.5 text-sm font-normal text-muted-foreground outline-none
-											${hasMultipleModels ? 'hover:text-foreground cursor-pointer' : 'cursor-default'}
-										`}
-									>
-										{selectedModel && (
-											<LlmProviderIcon provider={selectedModel.provider} className='size-3.5' />
-										)}
-										{selectedModel
-											? getModelDisplayName(selectedModel.provider, selectedModel.modelId)
-											: 'Select model'}
-										{hasMultipleModels && <ChevronDown className='size-3' />}
-									</button>
-								</DropdownMenuTrigger>
+		<ChatInputBase
+			promptRef={promptRef}
+			className={className}
+			initialText={initialText}
+			onCancel={onCancel}
+			onSubmitMessage={onSubmitMessage}
+		/>
+	);
+}
 
-								{hasMultipleModels && (
-									<DropdownMenuContent align='start' side='top'>
-										<DropdownMenuGroup>
-											{models.map((model) => {
-												const isSelected =
-													selectedModel?.provider === model.provider &&
-													selectedModel?.modelId === model.modelId;
-												return (
-													<DropdownMenuItem
-														key={`${model.provider}-${model.modelId}`}
-														onSelect={() => setSelectedModel(model)}
-														className={isSelected ? 'bg-accent' : ''}
-													>
-														<LlmProviderIcon provider={model.provider} className='size-4' />
-														{getModelDisplayName(model.provider, model.modelId)}
-													</DropdownMenuItem>
-												);
-											})}
-										</DropdownMenuGroup>
-									</DropdownMenuContent>
-								)}
-							</DropdownMenu>
-						)}
+function ChatInputBase({
+	promptRef,
+	className,
+	placeholder = 'Ask anything about your data...',
+	initialText,
+	onCancel,
+	onSubmitMessage,
+	allowQueueing,
+}: ChatInputBaseProps) {
+	const [inputText, setInputText] = useState('');
+	const { isRunning, stopAgent, isLoadingMessages, setMentions, submitQueuedMessageNow, error, selectedModel } =
+		useAgentContext();
+	const chatId = useChatId();
+	const imageUpload = useImageUpload();
+	const effectivePlaceholder = isRunning && allowQueueing ? 'Add a follow-up...' : placeholder;
+
+	const agentSettings = useQuery(trpc.project.getAgentSettings.queryOptions());
+	const transcribeModels = useQuery(trpc.project.getKnownTranscribeModels.queryOptions());
+	const isTranscribeEnabled = agentSettings.data?.transcribe?.enabled ?? false;
+	const hasTranscribeProvider = Object.values(transcribeModels.data ?? {}).some((p) => p.hasKey);
+	const isTranscribeReady = isTranscribeEnabled && hasTranscribeProvider;
+
+	const budgetStatus = useQuery({
+		...trpc.budget.checkBudgetStatus.queryOptions({ provider: selectedModel?.provider ?? 'openai' }),
+		enabled: !!selectedModel?.provider,
+		refetchOnWindowFocus: false,
+	});
+	const isBudgetExceeded = !!parseBudgetError(error) || budgetStatus.data?.level === 'exceeded';
+
+	const [micWarning, setMicWarning] = useState(false);
+	const micWarningTimer = useRef(0);
+	const dropZoneRef = useRef<HTMLDivElement>(null);
+	const [isDragging, setIsDragging] = useState(false);
+
+	useEffect(() => promptRef.current?.focus(), [chatId, promptRef]);
+
+	useEffect(() => {
+		const el = dropZoneRef.current;
+		if (!el) {
+			return;
+		}
+
+		let dragCounter = 0;
+
+		const handleDragEnter = (e: DragEvent) => {
+			e.preventDefault();
+			dragCounter++;
+			if (e.dataTransfer?.types.includes('Files')) {
+				setIsDragging(true);
+			}
+		};
+
+		const handleDragLeave = (e: DragEvent) => {
+			e.preventDefault();
+			dragCounter--;
+			if (dragCounter === 0) {
+				setIsDragging(false);
+			}
+		};
+
+		const handleDragOver = (e: DragEvent) => {
+			e.preventDefault();
+		};
+
+		const handleDrop = (e: DragEvent) => {
+			e.preventDefault();
+			dragCounter = 0;
+			setIsDragging(false);
+			if (e.dataTransfer?.files) {
+				imageUpload.addFiles(e.dataTransfer.files);
+			}
+		};
+
+		el.addEventListener('dragenter', handleDragEnter);
+		el.addEventListener('dragleave', handleDragLeave);
+		el.addEventListener('dragover', handleDragOver);
+		el.addEventListener('drop', handleDrop);
+		return () => {
+			el.removeEventListener('dragenter', handleDragEnter);
+			el.removeEventListener('dragleave', handleDragLeave);
+			el.removeEventListener('dragover', handleDragOver);
+			el.removeEventListener('drop', handleDrop);
+		};
+	}, [imageUpload.addFiles]); // eslint-disable-line
+
+	useEffect(() => {
+		const handler = (e: ClipboardEvent) => {
+			if (dropZoneRef.current?.contains(e.target as Node)) {
+				imageUpload.handlePaste(e);
+			}
+		};
+		document.addEventListener('paste', handler);
+		return () => document.removeEventListener('paste', handler);
+	}, [imageUpload.handlePaste]); // eslint-disable-line
+
+	const showMicWarning = useCallback(() => {
+		setMicWarning(true);
+		window.clearTimeout(micWarningTimer.current);
+		micWarningTimer.current = window.setTimeout(() => setMicWarning(false), 5000);
+	}, []);
+
+	const submitMessage = useCallback(
+		async (text: string, currentMentions: SelectedMention[] = []) => {
+			const trimmedInput = text.trim();
+			if (!trimmedInput && !imageUpload.hasImages) {
+				if (isRunning && allowQueueing) {
+					const queue = messageQueueStore.getSnapshot(chatId);
+					if (queue?.length) {
+						await submitQueuedMessageNow(queue[0].id);
+					}
+				}
+				return;
+			}
+
+			if ((isRunning && !allowQueueing) || isBudgetExceeded) {
+				return;
+			}
+
+			setMentions(currentMentions.map((m) => ({ id: m.id, label: m.label, trigger: m.trigger })));
+			promptRef.current?.clear();
+			setInputText('');
+
+			const images = imageUpload.getImagesForUpload();
+			imageUpload.clearImages();
+
+			await onSubmitMessage({
+				text: trimmedInput || (images.length > 0 ? 'Describe this image' : ''),
+				images: images.length > 0 ? images : undefined,
+			});
+		},
+		[
+			onSubmitMessage,
+			isRunning,
+			allowQueueing,
+			isBudgetExceeded,
+			setMentions,
+			promptRef,
+			imageUpload,
+			chatId,
+			submitQueuedMessageNow,
+		],
+	);
+
+	const {
+		state: transcribeState,
+		toggle: toggleRecording,
+		isRecording,
+		isTranscribing,
+		analyserRef,
+	} = useTranscribe({ onTranscribed: submitMessage });
+
+	useEffect(() => {
+		if (typeof initialText !== 'string') {
+			return;
+		}
+		promptRef.current?.clear();
+		promptRef.current?.insertText(initialText);
+		setInputText(initialText);
+		promptRef.current?.focus();
+	}, [initialText, promptRef]);
+
+	const handleSubmitMessage = async (e: FormEvent) => {
+		e.preventDefault();
+		const mentions = promptRef.current?.getMentions() ?? [];
+		await submitMessage(inputText, mentions);
+	};
+	const isInputEmpty = !inputText.trim() && !imageUpload.hasImages;
+
+	const skills = useQuery(trpc.skill.list.queryOptions());
+	const databaseObjects = useQuery(trpc.project.getDatabaseObjects.queryOptions());
+	const hasSkills = Boolean(skills.data?.length);
+	const hasDatabases = Boolean(databaseObjects.data?.length);
+
+	const handleEditQueuedMessage = useCallback(
+		(text: string) => {
+			promptRef.current?.clear();
+			promptRef.current?.insertText(text);
+			promptRef.current?.focus();
+		},
+		[promptRef],
+	);
+
+	const openSkillsMenu = useCallback(() => {
+		promptRef.current?.insertText('/');
+	}, [promptRef]);
+
+	const openDatabaseMenu = useCallback(() => {
+		promptRef.current?.insertText(DATABASE_MENTION_TRIGGER);
+	}, [promptRef]);
+
+	return (
+		<div ref={dropZoneRef} className={cn('px-3 pb-3 pt-0 md:px-4 md:pb-4 max-w-3xl w-full mx-auto', className)}>
+			<ChatInputMessageQueue onEditMessage={handleEditQueuedMessage} onSubmitNow={submitQueuedMessageNow} />
+			<BudgetBanner />
+
+			<form onSubmit={handleSubmitMessage} className='mx-auto relative'>
+				<InputGroup
+					htmlFor='chat-input'
+					className={cn('dark:bg-muted', isDragging && 'ring-2 ring-primary/50 border-primary')}
+				>
+					<ChatInputImagePreview images={imageUpload.images} onRemove={imageUpload.removeImage} />
+					<ChatPrompt
+						promptRef={promptRef}
+						placeholder={effectivePlaceholder}
+						onChange={(value) => setInputText(value)}
+						onEnter={(value, mentions) => submitMessage(value, mentions)}
+					/>
+
+					<input
+						ref={imageUpload.fileInputRef}
+						type='file'
+						accept='image/png,image/jpeg,image/gif,image/webp'
+						multiple
+						className='hidden'
+						onChange={imageUpload.handleFileInputChange}
+					/>
+
+					<InputGroupAddon align='block-end'>
+						{(!isTranscribeReady || (!isRecording && !isTranscribing)) && <ChatInputModelSelect />}
 
 						{isTranscribeReady && isRecording && <SlidingWaveform analyserRef={analyserRef} />}
 
-						<div className='ml-auto flex items-center gap-1.5 relative'>
+						<div className='flex items-center gap-1.5 md:gap-2 ml-auto relative'>
+							<ChatInputPlusMenu
+								hasDatabases={hasDatabases}
+								hasSkills={hasSkills}
+								onAddImage={imageUpload.openFilePicker}
+								onAddStory={() => {
+									promptRef.current?.appendMention(
+										{ id: STORY_MENTION_ID, label: 'Story mode' },
+										'#',
+									);
+								}}
+								onOpenSkills={openSkillsMenu}
+								onOpenDatabase={openDatabaseMenu}
+								onFocusPrompt={() => promptRef.current?.focus()}
+							/>
+
+							{onCancel && (
+								<Button variant='ghost' type='button' size='sm' onClick={onCancel}>
+									Cancel
+								</Button>
+							)}
+
+							<ContextWindowRing />
+
 							{isTranscribeReady && isRecording && <RecordingTimer />}
 							<MicButton
 								state={isTranscribeReady ? transcribeState : 'idle'}
 								onClick={isTranscribeReady ? toggleRecording : showMicWarning}
-								disabled={isRunning}
+								disabled={isRunning && !allowQueueing}
 							/>
 							{micWarning && <MicWarningBanner onDismiss={() => setMicWarning(false)} />}
 
-							<ChatButton
-								isRunning={isRunning}
-								disabled={isLoadingMessages || !hasInput}
-								onClick={isRunning ? stopAgent : handleSubmit}
-								type='button'
-							/>
+							{allowQueueing && isRunning ? (
+								<ChatButton
+									showStop={isInputEmpty}
+									disabled={!isInputEmpty && isBudgetExceeded}
+									onClick={isInputEmpty ? stopAgent : handleSubmitMessage}
+									type='button'
+								/>
+							) : (
+								<ChatButton
+									showStop={isRunning}
+									disabled={isLoadingMessages || isInputEmpty || (!isRunning && isBudgetExceeded)}
+									onClick={isRunning ? stopAgent : handleSubmitMessage}
+									type='button'
+								/>
+							)}
 						</div>
 					</InputGroupAddon>
 				</InputGroup>
 			</form>
 		</div>
+	);
+}
+
+function BudgetBanner() {
+	const { error, clearError, selectedModel } = useAgentContext();
+	const prevProviderRef = useRef(selectedModel?.provider);
+
+	useEffect(() => {
+		const prev = prevProviderRef.current;
+		prevProviderRef.current = selectedModel?.provider;
+		if (prev && prev !== selectedModel?.provider && parseBudgetError(error)) {
+			clearError();
+		}
+	}, [selectedModel?.provider, error, clearError]);
+
+	const budgetStatus = useQuery({
+		...trpc.budget.checkBudgetStatus.queryOptions({ provider: selectedModel?.provider ?? 'openai' }),
+		enabled: !!selectedModel?.provider,
+		refetchOnWindowFocus: false,
+	});
+
+	const errorMessage = parseBudgetError(error);
+	const level = errorMessage ? 'exceeded' : (budgetStatus.data?.level ?? 'ok');
+	const proactiveMessage = level !== 'ok' ? budgetStatus.data?.message : null;
+	const message = errorMessage ?? proactiveMessage;
+
+	if (!message) {
+		return null;
+	}
+
+	const isExceeded = level === 'exceeded';
+
+	return (
+		<div className='mb-2 flex items-start gap-2.5 rounded-2xl border border-input/50 bg-muted/50 px-3 py-2.5 text-sm text-muted-foreground animate-in fade-in slide-in-from-bottom-2 duration-200'>
+			<AlertTriangle className={cn('size-4 shrink-0 mt-0.5', isExceeded ? 'text-red-500' : 'text-amber-500')} />
+			<p className='flex-1 min-w-0'>{message}</p>
+		</div>
+	);
+}
+
+function ChatInputPlusMenu({
+	hasDatabases,
+	hasSkills,
+	onAddImage,
+	onAddStory,
+	onOpenSkills,
+	onOpenDatabase,
+	onFocusPrompt,
+}: {
+	hasDatabases: boolean;
+	hasSkills: boolean;
+	onAddImage: () => void;
+	onAddStory: () => void;
+	onOpenSkills: () => void;
+	onOpenDatabase: () => void;
+	onFocusPrompt: () => void;
+}) {
+	return (
+		<DropdownMenu>
+			<DropdownMenuTrigger asChild>
+				<button
+					type='button'
+					aria-label='Add context'
+					className='inline-flex items-center justify-center rounded-full size-7 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors cursor-pointer'
+				>
+					<Plus className='size-4 transition-transform duration-200 [[data-state=open]_&]:rotate-45' />
+				</button>
+			</DropdownMenuTrigger>
+			<DropdownMenuContent
+				side='top'
+				align='start'
+				collisionPadding={12}
+				className='min-w-44'
+				onCloseAutoFocus={(e) => {
+					e.preventDefault();
+					requestAnimationFrame(onFocusPrompt);
+				}}
+			>
+				<DropdownMenuItem onSelect={onAddImage}>
+					<ImageIcon className='size-4' />
+					<span>Upload image</span>
+				</DropdownMenuItem>
+				{hasDatabases && (
+					<DropdownMenuItem onSelect={onOpenDatabase}>
+						<Database className='size-4' />
+						<span>Database tables</span>
+					</DropdownMenuItem>
+				)}
+				<DropdownMenuItem onSelect={onAddStory}>
+					<StoryIcon className='size-4' />
+					<span>Story mode</span>
+				</DropdownMenuItem>
+				{hasSkills && (
+					<DropdownMenuItem onSelect={onOpenSkills}>
+						<PencilRuler className='size-4' />
+						<span>Skills</span>
+					</DropdownMenuItem>
+				)}
+			</DropdownMenuContent>
+		</DropdownMenu>
 	);
 }
 
