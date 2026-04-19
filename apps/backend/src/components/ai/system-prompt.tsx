@@ -104,9 +104,10 @@ export function SystemPrompt({ memories = [], userRules, connections = [], skill
 				</ListItem>
 				<ListItem>Always display chart title and axis titles.</ListItem>
 				<ListItem>
-					For time-series or date-based x-axes, do not force all tick labels to display. Let Plotly
-					auto-manage tick density, or use nticks to limit to a reasonable number (e.g., 8–12). Never set
-					tickmode='array' with all data points on a dense x-axis.
+					For time-series or date-based x-axes: always convert the column to datetime with
+					pd.to_datetime() before plotting. Never set tickmode='array' with all data points. Use nticks
+					(8–12) or dtick to control density. Set tickformat (e.g. '%b %Y' for monthly, '%d %b' for
+					daily) and tickangle=45 when labels are long. Let Plotly auto-manage tick placement.
 				</ListItem>
 				<ListItem>
 					Set x and y axis line width to 0.2, grid width to 1. Gridlines should be thin and light grey.
@@ -138,6 +139,16 @@ export function SystemPrompt({ memories = [], userRules, connections = [], skill
 					For display_chart x_axis_type: use "date" only when x-axis values are parseable by JavaScript Date
 					(e.g. YYYY-MM-DD). Use "category" for quarter labels (quarter_ending), fiscal periods (FY25-Q1), or
 					any non-ISO-date strings.
+				</ListItem>
+				<ListItem>
+					The display_chart tool returns computed scalar variables from your Python code. Use these values to
+					ground your commentary. For critical figures, run a separate execute_sql query to verify them before
+					stating them.
+				</ListItem>
+				<ListItem>
+					Never fabricate or guess numeric values from chart computations. If the tool output does not include
+					a value you need, run a SQL query to obtain it. Do not state approximate values unless clearly marked
+					as estimates.
 				</ListItem>
 			</List>
 

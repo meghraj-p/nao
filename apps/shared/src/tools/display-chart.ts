@@ -14,6 +14,7 @@ export const OutputSchema = z.object({
 	html: z.string().optional(),
 	error: z.string().optional(),
 	failed_code: z.string().optional(),
+	computed_values: z.record(z.string(), z.string()).optional(),
 });
 
 export type Input = z.infer<typeof InputSchema>;

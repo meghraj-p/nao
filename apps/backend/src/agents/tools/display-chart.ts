@@ -10,7 +10,7 @@ const MAX_CHART_ROWS = 50_000;
 async function executeChartPython(
 	pythonCode: string,
 	data: Record<string, unknown>[],
-): Promise<{ html: string } | { error: string }> {
+): Promise<{ html: string; computed_values?: Record<string, string> } | { error: string }> {
 	const response = await fetch(`http://localhost:${env.FASTAPI_PORT}/execute_chart_python`, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
@@ -52,7 +52,12 @@ export default tool<displayChart.Input, displayChart.Output>({
 			return { success: false, error: result.error, failed_code: python_code };
 		}
 
-		return { success: true, html: result.html };
+		const computed_values =
+			result.computed_values && Object.keys(result.computed_values).length > 0
+				? result.computed_values
+				: undefined;
+
+		return { success: true, html: result.html, computed_values };
 	},
 
 	toModelOutput: ({ output }) => renderToModelOutput(DisplayChartOutput({ output }), output),

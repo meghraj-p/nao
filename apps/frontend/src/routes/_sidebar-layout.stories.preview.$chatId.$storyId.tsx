@@ -93,7 +93,7 @@ function PreviewChartEmbed({
 	}
 
 	return (
-		<div className='my-2 aspect-3/2'>
+		<div className='my-2 h-[400px] min-w-[600px] w-full overflow-hidden'>
 			<ChartDisplay
 				data={data}
 				chartType={chart.chartType}

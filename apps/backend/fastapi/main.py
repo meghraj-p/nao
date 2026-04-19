@@ -123,6 +123,7 @@ class ExecuteChartPythonRequest(BaseModel):
 
 class ExecuteChartPythonResponse(BaseModel):
     html: str
+    computed_values: dict[str, str] = {}
 
 
 class HealthResponse(BaseModel):
@@ -167,6 +168,33 @@ def _validate_chart_code(code: str) -> str | None:
         match = BLOCKED_BUILTIN_PATTERN.search(code)
         return f"Blocked builtin detected: '{match.group()}'. Direct use of __import__, exec, eval, compile, open, getattr, setattr, delattr is not allowed."
     return None
+
+
+_NAMESPACE_BUILTINS = frozenset({
+    "__builtins__", "df", "pd", "np", "px", "go", "fig",
+    "math", "datetime", "date", "statistics",
+})
+_MAX_SCALARS = 50
+_MAX_SCALAR_VALUE_LEN = 200
+
+
+def _extract_scalars(namespace: dict) -> dict[str, str]:
+    """Collect user-defined scalar variables from the sandbox namespace."""
+    scalars: dict[str, str] = {}
+    for key, value in namespace.items():
+        if key.startswith("_") or key in _NAMESPACE_BUILTINS:
+            continue
+        if not isinstance(value, (int, float, str, bool, np.integer, np.floating)):
+            continue
+        if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+            continue
+        text = str(value)
+        if len(text) > _MAX_SCALAR_VALUE_LEN:
+            text = text[:_MAX_SCALAR_VALUE_LEN] + "…"
+        scalars[key] = text
+        if len(scalars) >= _MAX_SCALARS:
+            break
+    return scalars
 
 
 def _convert_value(v: object):
@@ -392,7 +420,9 @@ async def execute_chart_python(request: ExecuteChartPythonRequest):
             detail=f"Failed to convert figure to HTML: {traceback.format_exc()}",
         )
 
-    return ExecuteChartPythonResponse(html=html)
+    computed_values = _extract_scalars(namespace)
+
+    return ExecuteChartPythonResponse(html=html, computed_values=computed_values)
 
 
 if __name__ == "__main__":

@@ -5,12 +5,27 @@ import { useTheme } from '@/contexts/theme.provider';
 
 const CHART_CSS_VARS = ['--chart-1', '--chart-2', '--chart-3', '--chart-4', '--chart-5'] as const;
 
+/** Converts any CSS color (including oklch) to a hex string Plotly can understand. */
+function cssColorToHex(value: string): string {
+	const ctx = document.createElement('canvas').getContext('2d');
+	if (!ctx) {
+		return value;
+	}
+	ctx.fillStyle = value;
+	return ctx.fillStyle;
+}
+
+function getCssVar(styles: CSSStyleDeclaration, name: string, fallback: string): string {
+	const raw = styles.getPropertyValue(name).trim();
+	return raw ? cssColorToHex(raw) : fallback;
+}
+
 function getResolvedColors(): string[] {
 	if (typeof document === 'undefined') {
 		return ['#6366f1', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6'];
 	}
 	const styles = getComputedStyle(document.documentElement);
-	return CHART_CSS_VARS.map((v) => styles.getPropertyValue(v).trim() || '#6366f1');
+	return CHART_CSS_VARS.map((v) => getCssVar(styles, v, '#6366f1'));
 }
 
 function getThemeColors(): Record<string, string> {
@@ -19,10 +34,10 @@ function getThemeColors(): Record<string, string> {
 	}
 	const styles = getComputedStyle(document.documentElement);
 	return {
-		background: styles.getPropertyValue('--background').trim() || 'transparent',
-		foreground: styles.getPropertyValue('--foreground').trim() || '#000000',
-		mutedForeground: styles.getPropertyValue('--muted-foreground').trim() || '#6b7280',
-		border: styles.getPropertyValue('--border').trim() || '#e5e7eb',
+		background: getCssVar(styles, '--background', 'transparent'),
+		foreground: getCssVar(styles, '--foreground', '#000000'),
+		mutedForeground: getCssVar(styles, '--muted-foreground', '#6b7280'),
+		border: getCssVar(styles, '--border', '#e5e7eb'),
 	};
 }
 

@@ -32,6 +32,14 @@ export function parseChartAttributes(attrString: string): Record<string, string>
 	return attrs;
 }
 
+function normalizeSeries(entry: Record<string, unknown>): ParsedChartBlock['series'][number] {
+	return {
+		data_key: String(entry.data_key ?? entry.key ?? entry.dataKey ?? ''),
+		color: String(entry.color ?? ''),
+		label: entry.label != null ? String(entry.label) : entry.name != null ? String(entry.name) : undefined,
+	};
+}
+
 export function parseChartBlock(attrString: string): ParsedChartBlock | null {
 	const attrs = parseChartAttributes(attrString);
 	if (!attrs.query_id || !attrs.chart_type || !attrs.x_axis_key) {
@@ -43,7 +51,7 @@ export function parseChartBlock(attrString: string): ParsedChartBlock | null {
 		try {
 			const parsed = JSON.parse(attrs.series);
 			if (Array.isArray(parsed)) {
-				series.push(...parsed);
+				series.push(...parsed.map(normalizeSeries));
 			}
 		} catch {
 			/* ignore malformed series */
