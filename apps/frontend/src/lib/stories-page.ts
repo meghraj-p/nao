@@ -1,4 +1,4 @@
-import type { StorySummary, SummarySegment } from '@/components/story-thumbnail';
+import type { StorySummary, SummarySegment } from '@nao/shared/types';
 
 export type DisplayMode = 'grid' | 'lines';
 export type GroupBy = 'ownership' | 'date' | 'user';
@@ -18,9 +18,11 @@ export type StoryItem = {
 	createdAt: Date;
 	author: string;
 	kind: 'own' | 'shared-with-me' | 'shared-project';
+	chatId?: string;
+	storySlug?: string;
 	summary: StorySummary;
 	link:
-		| { to: '/stories/preview/$chatId/$storyId'; params: { chatId: string; storyId: string } }
+		| { to: '/stories/preview/$chatId/$storySlug'; params: { chatId: string; storySlug: string } }
 		| { to: '/stories/shared/$shareId'; params: { shareId: string } };
 };
 
@@ -28,7 +30,7 @@ export type StoryGroup = { label: string; items: StoryItem[] };
 
 export type OwnStoryListItem = {
 	chatId: string;
-	storyId: string;
+	storySlug: string;
 	title: string;
 	createdAt: Date | string;
 	summary: StorySummary;
@@ -38,7 +40,7 @@ export type SharedStoryListItem = {
 	id: string;
 	userId: string;
 	chatId: string;
-	storyId: string;
+	storySlug: string;
 	title: string;
 	createdAt: Date | string;
 	authorName: string;
@@ -65,7 +67,7 @@ export function buildStoryItems({
 	const ownShareMap = new Map<string, string>();
 	for (const story of sharedStories) {
 		if (story.userId === currentUserId) {
-			const key = `${story.chatId}-${story.storyId}`;
+			const key = `${story.chatId}-${story.storySlug}`;
 			if (!ownShareMap.has(key)) {
 				ownShareMap.set(key, story.id);
 			}
@@ -73,19 +75,21 @@ export function buildStoryItems({
 	}
 
 	const ownItems: StoryItem[] = userStories.map((story) => {
-		const shareId = ownShareMap.get(`${story.chatId}-${story.storyId}`);
+		const shareId = ownShareMap.get(`${story.chatId}-${story.storySlug}`);
 		return {
-			id: `${story.chatId}-${story.storyId}`,
+			id: `${story.chatId}-${story.storySlug}`,
 			title: story.title,
 			createdAt: new Date(story.createdAt),
 			author: currentUserName,
 			kind: 'own',
+			chatId: story.chatId,
+			storySlug: story.storySlug,
 			summary: story.summary,
 			link: shareId
 				? { to: '/stories/shared/$shareId', params: { shareId } }
 				: {
-						to: '/stories/preview/$chatId/$storyId',
-						params: { chatId: story.chatId, storyId: story.storyId },
+						to: '/stories/preview/$chatId/$storySlug',
+						params: { chatId: story.chatId, storySlug: story.storySlug },
 					},
 		};
 	});

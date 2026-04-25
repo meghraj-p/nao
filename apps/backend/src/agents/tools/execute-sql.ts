@@ -57,6 +57,7 @@ export async function executeQuery(
 		);
 	}
 
+	const envVars = context.envVars;
 	const response = await fetch(`http://localhost:${env.FASTAPI_PORT}/execute_sql`, {
 		method: 'POST',
 		headers: {
@@ -66,6 +67,7 @@ export async function executeQuery(
 			sql: sql_query,
 			nao_project_folder: naoProjectFolder,
 			...(database_id && { database_id }),
+			...(Object.keys(envVars).length > 0 && { env_vars: envVars }),
 		}),
 	});
 

@@ -1,10 +1,11 @@
+import type { LlmProvider } from '@nao/shared/types';
+
 import { MemoryExtractorLLM } from '../agents/memory/memory-extractor-llm';
 import { LLM_PROVIDERS, type ProviderModelResult } from '../agents/providers';
 import { DBMemory, DBNewMemory } from '../db/abstractSchema';
 import * as llmInferenceQueries from '../queries/llm-inference';
 import * as memoryQueries from '../queries/memory';
 import { TokenUsage } from '../types/chat';
-import { LlmProvider } from '../types/llm';
 import type {
 	ExtractorLLMOutput,
 	MemoryCategory,
@@ -13,7 +14,8 @@ import type {
 	UserMemory,
 	UserProfile,
 } from '../types/memory';
-import { resolveProviderModel } from '../utils/llm';
+import { resolveAnnotationModelId, resolveProviderModel } from '../utils/llm';
+import { logger } from '../utils/logger';
 import { posthog, PostHogEvent } from './posthog';
 
 /**
@@ -34,7 +36,10 @@ class MemoryService {
 				content: memory.content,
 			}));
 		} catch (err) {
-			console.error('[memory] injection failed:', err);
+			logger.error(`Memory injection failed: ${String(err)}`, {
+				source: 'agent',
+				context: { userId, projectId },
+			});
 			return [];
 		}
 	}
@@ -42,7 +47,11 @@ class MemoryService {
 	/** Safely schedules memory extraction for a user message. */
 	public safeScheduleMemoryExtraction(opts: MemoryExtractionOptions) {
 		this._extractMemory(opts).catch((err) => {
-			console.error('[memory] extractor failed:', err);
+			logger.error(`Memory extraction failed: ${String(err)}`, {
+				source: 'agent',
+				projectId: opts.projectId,
+				context: { chatId: opts.chatId, userId: opts.userId },
+			});
 		});
 	}
 
@@ -52,7 +61,7 @@ class MemoryService {
 			return;
 		}
 
-		const modelId = this._getExtractorModelId(opts.provider);
+		const modelId = await this._getExtractorModelId(opts.projectId, opts.provider);
 		const model = await this._resolveModel(opts.projectId, opts.provider, modelId);
 		if (!model) {
 			return;
@@ -95,9 +104,8 @@ class MemoryService {
 		return resolveProviderModel(projectId, provider, modelId);
 	}
 
-	private _getExtractorModelId(provider: LlmProvider): string {
-		const providerConfig = LLM_PROVIDERS[provider];
-		return providerConfig.extractorModelId;
+	private async _getExtractorModelId(projectId: string, provider: LlmProvider): Promise<string> {
+		return resolveAnnotationModelId(projectId, provider, LLM_PROVIDERS[provider].extractorModelId);
 	}
 
 	private async _persistExtractedMemories(opts: {

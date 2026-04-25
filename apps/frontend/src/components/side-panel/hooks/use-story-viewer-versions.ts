@@ -4,14 +4,25 @@ import { trpc } from '@/main';
 
 interface UseStoryViewerVersionsParams {
 	chatId: string;
-	storyId: string;
+	storySlug: string;
 	isAgentRunning: boolean;
+	isReadonlyMode?: boolean;
 }
 
-export const useStoryViewerVersions = ({ chatId, storyId, isAgentRunning }: UseStoryViewerVersionsParams) => {
+export const useStoryViewerVersions = ({
+	chatId,
+	storySlug,
+	isAgentRunning,
+	isReadonlyMode,
+}: UseStoryViewerVersionsParams) => {
 	const queryClient = useQueryClient();
-	const { data, refetch } = useQuery(trpc.story.listVersions.queryOptions({ chatId, storyId }));
-	const versions = useMemo(() => data ?? [], [data]);
+	const { data, refetch } = useQuery({
+		...trpc.story.listVersions.queryOptions({ chatId, storySlug }),
+		enabled: !isReadonlyMode,
+	});
+	const versions = useMemo(() => data?.versions ?? [], [data?.versions]);
+	const storyTitle = data?.title;
+	const archivedAt = data?.archivedAt;
 	const [selectedVersionIndex, setSelectedVersionIndex] = useState(-1);
 	const previousRunningRef = useRef(isAgentRunning);
 
@@ -46,6 +57,8 @@ export const useStoryViewerVersions = ({ chatId, storyId, isAgentRunning }: UseS
 
 	return {
 		versions,
+		storyTitle,
+		archivedAt,
 		currentVersion,
 		currentVersionNumber,
 		isViewingLatest,

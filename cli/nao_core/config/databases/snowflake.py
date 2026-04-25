@@ -1,16 +1,17 @@
+from __future__ import annotations
+
 import logging
 import os
 import re
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
-import ibis
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import serialization
-from ibis import BaseBackend
 from pydantic import Field
 
 from nao_core.config.exceptions import InitError
 from nao_core.ui import UI, ask_confirm, ask_text
+
+if TYPE_CHECKING:
+    from ibis import BaseBackend
 
 from .base import DatabaseConfig
 from .context import DatabaseContext
@@ -61,6 +62,18 @@ class SnowflakeDatabaseContext(DatabaseContext):
         rows = self._conn.raw_sql(query).fetchall()  # type: ignore[union-attr]
         return {row[0]: str(row[1]) for row in rows if row[1]}
 
+    def _cast_float(self, expr: str) -> str:
+        return f"{expr}::FLOAT"
+
+    def _cast_complex_to_string(self, col_sql: str) -> str:
+        return f"TO_JSON({col_sql})::VARCHAR"
+
+    def _partition_filter(self) -> str:
+        cols = self.partition_columns()
+        if cols:
+            return f'"{cols[0]}" >= DATEADD(day, -30, CURRENT_DATE())'
+        return ""
+
 
 def _get_snowflake_clustering_columns(conn: BaseBackend, schema: str, table: str) -> list[str]:
     query = f"""
@@ -82,6 +95,18 @@ def _parse_clustering_key(clustering_key: str) -> list[str]:
     return [col.strip().strip('"') for col in match.group(1).split(",")]
 
 
+def _resolve_private_key(path: str | None, inline: str | None) -> bytes | None:
+    """Return raw PEM bytes from a file path or an inline string, or None."""
+    if path and inline:
+        raise InitError("Specify either private_key_path or private_key, not both")
+    if path:
+        with open(path, "rb") as f:
+            return f.read()
+    if inline:
+        return inline.encode()
+    return None
+
+
 class SnowflakeConfig(DatabaseConfig):
     """Snowflake-specific configuration."""
 
@@ -98,6 +123,10 @@ class SnowflakeConfig(DatabaseConfig):
     private_key_path: str | None = Field(
         default=None,
         description="Path to private key file for key-pair authentication",
+    )
+    private_key: str | None = Field(
+        default=None,
+        description="PEM-encoded private key string for key-pair authentication (alternative to private_key_path)",
     )
     passphrase: str | None = Field(
         default=None,
@@ -122,18 +151,24 @@ class SnowflakeConfig(DatabaseConfig):
         key_pair_auth = False if use_sso else ask_confirm("Use key-pair authentication?", default=False)
         authenticator = "externalbrowser" if use_sso else None
 
+        private_key_path = None
+        private_key = None
+        passphrase = None
+        password = None
+
         if key_pair_auth:
-            private_key_path = ask_text("Path to private key file:", required_field=True)
-            if not private_key_path or not os.path.isfile(private_key_path):
-                raise InitError(f"Private key file not found: {private_key_path}")
+            use_inline = ask_confirm("Paste the private key directly (instead of a file path)?", default=False)
+            if use_inline:
+                private_key = ask_text("PEM-encoded private key (paste full key):", password=True, required_field=True)
+            else:
+                private_key_path = ask_text("Path to private key file:", required_field=True)
+                if not private_key_path or not os.path.isfile(private_key_path):
+                    raise InitError(f"Private key file not found: {private_key_path}")
             passphrase = ask_text("Private key passphrase (optional):", password=True)
-            password = None
-        else:
-            password = None if use_sso else ask_text("Snowflake password:", password=True, required_field=True)
-            if not use_sso and not password:
+        elif not use_sso:
+            password = ask_text("Snowflake password:", password=True, required_field=True)
+            if not password:
                 raise InitError("Snowflake password cannot be empty.")
-            private_key_path = None
-            passphrase = None
 
         return SnowflakeConfig(
             name=name,
@@ -144,41 +179,45 @@ class SnowflakeConfig(DatabaseConfig):
             warehouse=warehouse,
             schema_name=schema,
             private_key_path=private_key_path,
+            private_key=private_key,
             passphrase=passphrase,
             authenticator=authenticator,
         )
 
     def connect(self) -> BaseBackend:
         """Create an Ibis Snowflake connection."""
+        from nao_core.deps import require_database_backend
+
+        require_database_backend("snowflake")
+        import ibis
+        from cryptography.hazmat.backends import default_backend
+        from cryptography.hazmat.primitives import serialization
+
         kwargs: dict = {"user": self.username}
         kwargs["account"] = self.account_id
 
-        # Always connect to just the database, not database/schema
-        # The sync provider will handle schema filtering via list_tables(database=schema)
         if self.database:
             kwargs["database"] = self.database
 
         if self.warehouse:
             kwargs["warehouse"] = self.warehouse
 
-        # Add authenticator if using SSO (external browser)
         if self.authenticator:
             kwargs["authenticator"] = self.authenticator
             UI.info(f"[yellow]Using authenticator: {self.authenticator}[/yellow]")
 
-        if self.private_key_path:
-            with open(self.private_key_path, "rb") as key_file:
-                private_key = serialization.load_pem_private_key(
-                    key_file.read(),
-                    password=self.passphrase.encode() if self.passphrase else None,
-                    backend=default_backend(),
-                )
-                # Convert to DER format which Snowflake expects
-                kwargs["private_key"] = private_key.private_bytes(
-                    encoding=serialization.Encoding.DER,
-                    format=serialization.PrivateFormat.PKCS8,
-                    encryption_algorithm=serialization.NoEncryption(),
-                )
+        pem_data = _resolve_private_key(self.private_key_path, self.private_key)
+        if pem_data is not None:
+            private_key = serialization.load_pem_private_key(
+                pem_data,
+                password=self.passphrase.encode() if self.passphrase else None,
+                backend=default_backend(),
+            )
+            kwargs["private_key"] = private_key.private_bytes(
+                encoding=serialization.Encoding.DER,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.NoEncryption(),
+            )
         elif self.password:
             kwargs["password"] = self.password
 
@@ -240,6 +279,17 @@ class SnowflakeConfig(DatabaseConfig):
 
     def create_context(self, conn: BaseBackend, schema: str, table_name: str) -> SnowflakeDatabaseContext:
         return SnowflakeDatabaseContext(conn, schema, table_name)
+
+    def get_query_history_sql(self, days: int) -> str | None:
+        return (
+            f"SELECT query_text AS query_text "
+            f"FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY "
+            f"WHERE start_time >= DATEADD(day, -{days}, CURRENT_TIMESTAMP()) "
+            f"AND execution_status = 'SUCCESS' "
+            f"AND query_type = 'SELECT' "
+            f"ORDER BY start_time DESC "
+            f"LIMIT 10000"
+        )
 
     def check_connection(self) -> tuple[bool, str]:
         """Test connectivity to Snowflake."""

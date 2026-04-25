@@ -3,15 +3,20 @@ import { StoryToolCall } from './story';
 import { DefaultToolCall } from './default';
 import { DisplayChartToolCall } from './display-chart';
 import { ExecutePythonToolCall } from './execute-python';
+import { ExecuteSandboxedCodeToolCall } from './execute-sandboxed-code';
 import { ExecuteSqlToolCall } from './execute-sql';
 import { GrepToolCall } from './grep';
 import { ListToolCall } from './list';
+import { McpToolCall } from './mcp';
 import { ReadToolCall } from './read';
 import { SearchToolCall } from './search';
+import { WebFetchToolCall } from './web-fetch';
+import { WebSearchToolCall } from './web-search';
 import type { StaticToolName, UIToolPart } from '@nao/backend/chat';
 import { getToolName, isToolSettled } from '@/lib/ai';
 import { ToolCallProvider } from '@/contexts/tool-call';
 import { useAssistantMessage } from '@/contexts/assistant-message';
+import { useMcpContext } from '@/contexts/mcp';
 
 export type ToolCallComponentProps<TToolName extends StaticToolName | undefined = undefined> = {
 	toolPart: UIToolPart<TToolName>;
@@ -23,6 +28,7 @@ const toolComponents: Partial<{
 	story: StoryToolCall,
 	display_chart: DisplayChartToolCall,
 	execute_python: ExecutePythonToolCall,
+	execute_sandboxed_code: ExecuteSandboxedCodeToolCall,
 	execute_sql: ExecuteSqlToolCall,
 	grep: GrepToolCall,
 	list: ListToolCall,
@@ -30,17 +36,35 @@ const toolComponents: Partial<{
 	search: SearchToolCall,
 };
 
+const dynamicToolComponents: Record<string, React.ComponentType<ToolCallComponentProps>> = {
+	web_search: WebSearchToolCall,
+	web_fetch: WebFetchToolCall,
+	google_search: WebSearchToolCall,
+};
+
 export const ToolCall = memo(({ toolPart }: { toolPart: UIToolPart }) => {
 	const { isSettled: isMessageSettled } = useAssistantMessage();
+	const { mcpState } = useMcpContext();
+	const mcpServerNames = mcpState ? Object.keys(mcpState) : [];
+
 	if (toolPart.type === 'tool-suggest_follow_ups') {
 		return null;
 	}
 
-	const Component = toolComponents[getToolName(toolPart) as StaticToolName] as
-		| React.ComponentType<ToolCallComponentProps>
-		| undefined;
+	const toolName = getToolName(toolPart);
+	const isMcpTool = mcpServerNames.some((server) => toolName.startsWith(`${server}`));
 
-	const Rendered = Component ? <Component toolPart={toolPart} /> : <DefaultToolCall toolPart={toolPart} />;
+	const Component =
+		(toolComponents[toolName as StaticToolName] as React.ComponentType<ToolCallComponentProps> | undefined) ??
+		dynamicToolComponents[toolName];
+
+	const Rendered = Component ? (
+		<Component toolPart={toolPart} />
+	) : isMcpTool ? (
+		<McpToolCall toolPart={toolPart} />
+	) : (
+		<DefaultToolCall toolPart={toolPart} />
+	);
 
 	return (
 		<ToolCallProvider

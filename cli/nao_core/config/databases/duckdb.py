@@ -1,13 +1,22 @@
-from pathlib import Path
-from typing import Literal
+from __future__ import annotations
 
-import ibis
-from ibis import BaseBackend
+from pathlib import Path
+from typing import TYPE_CHECKING, Literal
+
 from pydantic import Field
 
 from nao_core.ui import ask_text
 
+if TYPE_CHECKING:
+    from ibis import BaseBackend
+
 from .base import DatabaseConfig
+from .context import DatabaseContext
+
+
+class DuckDBDatabaseContext(DatabaseContext):
+    def _cast_complex_to_string(self, col_sql: str) -> str:
+        return f"CAST({col_sql} AS VARCHAR)"
 
 
 class DuckDBConfig(DatabaseConfig):
@@ -26,6 +35,11 @@ class DuckDBConfig(DatabaseConfig):
 
     def connect(self) -> BaseBackend:
         """Create an Ibis DuckDB connection."""
+        from nao_core.deps import require_database_backend
+
+        require_database_backend("duckdb")
+        import ibis
+
         return ibis.duckdb.connect(
             database=self.path,
             read_only=False if self.path == ":memory:" else True,
@@ -49,3 +63,6 @@ class DuckDBConfig(DatabaseConfig):
         finally:
             if conn is not None:
                 conn.disconnect()
+
+    def create_context(self, conn: BaseBackend, schema: str, table_name: str) -> DuckDBDatabaseContext:
+        return DuckDBDatabaseContext(conn, schema, table_name)

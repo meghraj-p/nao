@@ -38,14 +38,14 @@ export default createTool<story.Input, story.Output>({
 			if (!input.code || !input.title) {
 				return fail('"code" and "title" are required for the "create" action.');
 			}
-			const existingVersion = await storyQueries.getLatestVersion(chatId, input.id);
-			if (existingVersion) {
+			const existingStory = await storyQueries.getStoryByChatAndSlug(chatId, input.id);
+			if (existingStory) {
 				return fail(`Story "${input.id}" already exists. Use "update" or "replace" instead.`);
 			}
 
 			const version = await storyQueries.createVersion({
 				chatId,
-				storyId: input.id,
+				slug: input.id,
 				title: input.title,
 				code: input.code,
 				action: 'create',
@@ -81,7 +81,7 @@ export default createTool<story.Input, story.Output>({
 			)}`;
 			const version = await storyQueries.createVersion({
 				chatId,
-				storyId: input.id,
+				slug: input.id,
 				title: existing.title,
 				code: newCode,
 				action: 'update',
@@ -105,7 +105,7 @@ export default createTool<story.Input, story.Output>({
 
 		const version = await storyQueries.createVersion({
 			chatId,
-			storyId: input.id,
+			slug: input.id,
 			title: existing.title,
 			code: input.code,
 			action: 'replace',

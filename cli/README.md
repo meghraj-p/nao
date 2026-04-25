@@ -4,8 +4,58 @@ Command-line interface for nao chat.
 
 ## Installation
 
+Install the core package (lightweight, no database or LLM dependencies):
+
 ```bash
 pip install nao-core
+```
+
+Then add only the providers you need:
+
+```bash
+# Database backends
+pip install 'nao-core[postgres]'
+pip install 'nao-core[bigquery]'
+pip install 'nao-core[snowflake]'
+pip install 'nao-core[duckdb]'
+pip install 'nao-core[clickhouse]'
+pip install 'nao-core[databricks]'
+pip install 'nao-core[mysql]'
+pip install 'nao-core[mssql]'
+pip install 'nao-core[athena]'
+pip install 'nao-core[trino]'
+pip install 'nao-core[redshift]'
+pip install 'nao-core[fabric]'
+
+# LLM providers
+pip install 'nao-core[openai]'
+pip install 'nao-core[anthropic]'
+pip install 'nao-core[mistral]'
+pip install 'nao-core[gemini]'
+pip install 'nao-core[ollama]'
+
+# Integrations
+pip install 'nao-core[notion]'
+```
+
+Combine multiple extras in a single install:
+
+```bash
+pip install 'nao-core[postgres,openai]'
+pip install 'nao-core[snowflake,bigquery,anthropic]'
+```
+
+Or install everything at once (equivalent to the previous default):
+
+```bash
+pip install 'nao-core[all]'
+```
+
+Convenience groups are also available:
+
+```bash
+pip install 'nao-core[all-databases]'  # all database backends
+pip install 'nao-core[all-llms]'       # all LLM providers
 ```
 
 ## Usage
@@ -35,7 +85,8 @@ This will create a new nao project in the current directory. It will prompt you 
 
 - **Database connections** (BigQuery, DuckDB, Databricks, Snowflake, PostgreSQL, Redshift, MSSQL, Trino)
 - **Git repositories** to sync
-- **LLM provider** (OpenAI, Anthropic, Mistral, Gemini)
+- **LLM provider** (OpenAI, Anthropic, Mistral, Gemini, OpenRouter, Ollama)
+- **`ai_summary` template + model** (prompted only when you enable `ai_summary` for databases)
 - **Slack integration**
 - **Notion integration**
 
@@ -85,11 +136,17 @@ nao sync
 
 Syncs configured resources to local files:
 
-- **Databases** — generates markdown docs (`columns.md`, `preview.md`, `description.md`, `profiling.md`) for each table into `databases/`
+- **Databases** - generates markdown docs (`columns.md`, `preview.md`, `description.md`) for each table into `databases/`
 - **Git repositories** — clones or pulls repos into `repos/`
 - **Notion pages** — exports pages as markdown into `docs/notion/`
 
 After syncing, any Jinja templates (`*.j2` files) in the project directory are rendered with the nao context.
+
+Optional `ai_summary` generation:
+
+- Add `ai_summary` to a database connection `templates` list to render `ai_summary.md`.
+- Use `prompt("...")` inside Jinja templates to generate `ai_summary` content.
+- `prompt(...)` requires `llm.provider`, `llm.annotation_model`, and `llm.api_key` (except for ollama).
 
 ### Run tests
 
@@ -169,7 +226,7 @@ This will:
 
 ```bash
 cd cli
-pip install -e .
+pip install -e '.[all]'
 ```
 
 ### Publishing to PyPI

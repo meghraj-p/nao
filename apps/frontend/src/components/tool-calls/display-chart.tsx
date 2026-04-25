@@ -167,7 +167,9 @@ function buildTraces({
 
 	if (type === 'pie' || type === 'donut') {
 		const s = series[0];
-		if (!s) {return [];}
+		if (!s) {
+			return [];
+		}
 		return [
 			{
 				type: 'pie' as const,
@@ -182,7 +184,9 @@ function buildTraces({
 
 	if (type === 'heatmap') {
 		const s = series[0];
-		if (!s) {return [];}
+		if (!s) {
+			return [];
+		}
 		const yKeys = series.map((si) => si.data_key);
 		const z = yKeys.map((key) => data.map((row) => toNumeric(row[key])));
 		return [
@@ -218,7 +222,14 @@ function buildTraces({
 				return { ...base, type: 'bar' as const, marker: { color } } as Data;
 
 			case 'horizontal_bar':
-				return { ...base, type: 'bar' as const, orientation: 'h' as const, x: y, y: x, marker: { color } } as Data;
+				return {
+					...base,
+					type: 'bar' as const,
+					orientation: 'h' as const,
+					x: y,
+					y: x,
+					marker: { color },
+				} as Data;
 
 			case 'line':
 				return { ...base, type: 'scatter' as const, mode: 'lines' as const, line: { color } } as Data;
@@ -269,7 +280,9 @@ function buildLayout({
 		legend: { orientation: 'h', y: -0.15, yanchor: 'top', x: 0.5, xanchor: 'center' },
 	};
 
-	if (isPie) {return base;}
+	if (isPie) {
+		return base;
+	}
 
 	const axisBase = {
 		showgrid: true,
@@ -280,8 +293,18 @@ function buildLayout({
 
 	return {
 		...base,
-		barmode: type === 'stacked_bar' ? 'stack' : type === 'bar' || type === 'column' || type === 'grouped_column' || type === 'horizontal_bar' ? 'group' : undefined,
-		xaxis: { ...axisBase, type: xAxisType === 'number' ? ('linear' as const) : ('-' as const), automargin: true, tickangle: -45 },
+		barmode:
+			type === 'stacked_bar'
+				? 'stack'
+				: type === 'bar' || type === 'column' || type === 'grouped_column' || type === 'horizontal_bar'
+					? 'group'
+					: undefined,
+		xaxis: {
+			...axisBase,
+			type: xAxisType === 'number' ? ('linear' as const) : ('-' as const),
+			automargin: true,
+			tickangle: -45,
+		},
 		yaxis: { ...axisBase, autorange: true, rangemode: 'normal', automargin: true },
 	};
 }

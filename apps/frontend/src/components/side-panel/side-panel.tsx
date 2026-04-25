@@ -4,6 +4,8 @@ import { ArrowRightToLine } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ResizableHandle } from '@/components/ui/resizable';
 import { useSidePanelResize } from '@/hooks/use-side-panel-resize';
+import { useIsMobile } from '@/hooks/use-is-mobile';
+import { cn } from '@/lib/utils';
 
 type SidePanelProps = {
 	containerRef: React.RefObject<HTMLDivElement | null>;
@@ -12,6 +14,7 @@ type SidePanelProps = {
 	children: React.ReactNode;
 	onClose: () => void;
 	isAnimating: boolean;
+	className?: string;
 };
 
 export const SidePanel = memo(function SidePanel({
@@ -21,11 +24,21 @@ export const SidePanel = memo(function SidePanel({
 	children,
 	onClose,
 	isAnimating,
+	className,
 }: SidePanelProps) {
-	useSidePanelResize(sidePanelRef, containerRef, resizeHandleRef, !isAnimating);
+	const isMobile = useIsMobile();
+	useSidePanelResize(sidePanelRef, containerRef, resizeHandleRef, !isAnimating && !isMobile);
+
+	if (isMobile) {
+		return (
+			<div ref={sidePanelRef} className='fixed inset-0 z-40 bg-background flex flex-col'>
+				<div className='flex-1 min-h-0 overflow-hidden'>{children}</div>
+			</div>
+		);
+	}
 
 	return (
-		<div ref={sidePanelRef} className='h-full bg-panel'>
+		<div ref={sidePanelRef} className={cn('h-full bg-panel', className)}>
 			<div className='h-full min-w-72 relative flex py-4'>
 				<div className='h-full relative flex items-center justify-center py-4 w-0 z-20'>
 					<Button variant='outline' size='icon-xs' className='ml-auto absolute top-8' onClick={onClose}>

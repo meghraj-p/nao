@@ -1,4 +1,5 @@
 import formbody from '@fastify/formbody';
+import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import { fastifyTRPCPlugin, FastifyTRPCPluginOptions } from '@trpc/server/adapters/fastify';
 import fastify from 'fastify';
@@ -8,25 +9,34 @@ import { existsSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
-import { env } from './env';
+import { env, isCloud } from './env';
 import { ensureOrganizationSetup } from './queries/organization.queries';
 import { agentRoutes } from './routes/agent';
 import { authRoutes } from './routes/auth';
 import { chartRoutes } from './routes/chart';
+import { deployRoutes } from './routes/deploy';
+import { githubRoutes } from './routes/github';
+import { imageRoutes } from './routes/image';
 import { slackRoutes } from './routes/slack';
+import { teamsRoutes } from './routes/teams';
+import { telegramRoutes } from './routes/telegram';
 import { testRoutes } from './routes/test';
+import { whatsappRoutes } from './routes/whatsapp';
 import { posthog, PostHogEvent } from './services/posthog';
 import { TrpcRouter, trpcRouter } from './trpc/router';
 import { createContext } from './trpc/trpc';
-import { HandlerError } from './utils/error';
+import { BudgetExceededError, HandlerError } from './utils/error';
+import { startLogCleanup } from './utils/log-cleanup';
+import { logger } from './utils/logger';
 
 // Get the directory of the current module (works in both dev and compiled)
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const isDev = env.MODE !== 'prod';
-// pino-pretty transport uses worker threads and can't be resolved inside a Bun-compiled binary
-const isCompiled = typeof Bun !== 'undefined' && Bun.main.startsWith('/$bunfs/');
+// pino-pretty transport uses worker threads and can't be resolved inside a Bun-compiled binary.
+// Unix path: /$bunfs/root/..., Windows path: B:/~BUN/root/...
+const isCompiled = typeof Bun !== 'undefined' && /(\$bunfs|~BUN)/.test(Bun.main);
 
 const app = fastify({
 	logger:
@@ -52,11 +62,40 @@ app.setValidatorCompiler(validatorCompiler);
 app.setSerializerCompiler(serializerCompiler);
 
 // Map HandlerError to HTTP status code
-app.setErrorHandler((error, _request, reply) => {
+app.setErrorHandler((error, request, reply) => {
+	const message = error instanceof Error ? error.message : String(error);
+	const statusCode =
+		typeof (error as Record<string, unknown>).statusCode === 'number'
+			? (error as Record<string, unknown>).statusCode
+			: undefined;
+	logger.error(message, {
+		source: 'http',
+		context: { method: request.method, url: request.url, statusCode },
+	});
+	if (error instanceof BudgetExceededError) {
+		return reply.status(error.code).send({ error: error.message, code: 'BUDGET_EXCEEDED' });
+	}
 	if (error instanceof HandlerError) {
 		return reply.status(error.code).send({ error: error.message });
 	}
 	throw error;
+});
+
+// Log HTTP requests to the database (skip log-polling to avoid self-referential noise)
+app.addHook('onResponse', (request, reply, done) => {
+	if (request.url.includes('log.getLogs')) {
+		done();
+		return;
+	}
+	if (reply.statusCode >= 400) {
+		done();
+		return;
+	}
+	logger.info(`${request.method} ${request.url} ${reply.statusCode}`, {
+		source: 'http',
+		context: { method: request.method, url: request.url, statusCode: reply.statusCode, elapsed: reply.elapsedTime },
+	});
+	done();
 });
 
 // Register raw body plugin for Slack signature verification
@@ -69,6 +108,9 @@ app.register(fastifyRawBody, {
 // Register formbody plugin for Slack interaction payloads (application/x-www-form-urlencoded)
 app.register(formbody);
 
+// Register multipart plugin for file uploads (deploy endpoint)
+app.register(multipart, { limits: { fileSize: 100 * 1024 * 1024 } });
+
 // Register tRPC plugin
 app.register(fastifyTRPCPlugin, {
 	prefix: '/api/trpc',
@@ -76,7 +118,10 @@ app.register(fastifyTRPCPlugin, {
 		router: trpcRouter,
 		createContext,
 		onError({ path, error }) {
-			console.error(`Error in tRPC handler on path '${path}':\n`, error);
+			logger.error(`tRPC error on ${path}: ${error.message}`, {
+				source: 'http',
+				context: { path, code: error.code },
+			});
 		},
 	} satisfies FastifyTRPCPluginOptions<TrpcRouter>['trpcOptions'],
 });
@@ -93,12 +138,36 @@ app.register(chartRoutes, {
 	prefix: '/c',
 });
 
+app.register(imageRoutes, {
+	prefix: '/i',
+});
+
 app.register(authRoutes, {
 	prefix: '/api',
 });
 
 app.register(slackRoutes, {
-	prefix: '/api/slack/events',
+	prefix: '/api/webhooks/slack',
+});
+
+app.register(teamsRoutes, {
+	prefix: '/api/webhooks/teams',
+});
+
+app.register(telegramRoutes, {
+	prefix: '/api/webhooks/telegram',
+});
+
+app.register(whatsappRoutes, {
+	prefix: '/api/webhooks/whatsapp',
+});
+
+app.register(deployRoutes, {
+	prefix: '/api',
+});
+
+app.register(githubRoutes, {
+	prefix: '/api/github',
 });
 
 /**
@@ -119,17 +188,30 @@ const possibleStaticPaths = [
 ];
 
 const staticRoot = possibleStaticPaths.find((p) => existsSync(p));
+const isReservedBackendPath = (url: string) => {
+	const pathname = url.split('?', 1)[0];
+	return (
+		pathname === '/api' ||
+		pathname.startsWith('/api/') ||
+		pathname === '/c' ||
+		pathname.startsWith('/c/') ||
+		pathname === '/i' ||
+		pathname.startsWith('/i/')
+	);
+};
+
 console.log('Static root:', staticRoot || 'Not found (API-only mode)');
 
 if (staticRoot) {
 	app.register(fastifyStatic, {
 		root: staticRoot,
 		prefix: '/',
+		wildcard: false,
 	});
 
 	// SPA fallback: serve index.html for all non-API routes
 	app.setNotFoundHandler((request, reply) => {
-		if (request.url.startsWith('/api')) {
+		if (isReservedBackendPath(request.url)) {
 			reply.status(404).send({ error: 'Not found' });
 		} else {
 			reply.sendFile('index.html');
@@ -138,7 +220,12 @@ if (staticRoot) {
 }
 
 export const startServer = async (opts: { port: number; host: string }) => {
-	await ensureOrganizationSetup();
+	if (isCloud) {
+		// TODO: Implement cloud mode
+	} else {
+		await ensureOrganizationSetup();
+	}
+	startLogCleanup();
 
 	const address = await app.listen({ host: opts.host, port: opts.port });
 	app.log.info(`Server is running on ${address}`);

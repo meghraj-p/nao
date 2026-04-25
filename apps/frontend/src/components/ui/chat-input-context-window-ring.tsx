@@ -62,12 +62,13 @@ export function ContextWindowRing({ className }: ContextWindowRingProps) {
 			},
 			{
 				enabled: !!chatId && !isRunning && hasAssistantMessage && !!selectedModel,
-				staleTime: 60_000,
+				staleTime: 0,
+				refetchOnWindowFocus: false,
 			},
 		),
 	);
 
-	if (isRunning || !hasAssistantMessage || contextUsage.data?.contextWindow == null) {
+	if (!hasAssistantMessage || contextUsage.data?.contextWindow == null) {
 		return null;
 	}
 

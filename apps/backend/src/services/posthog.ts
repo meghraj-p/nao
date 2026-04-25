@@ -20,6 +20,7 @@ export enum PostHogEvent {
 
 	ChatRenamed = 'chat_renamed',
 	ChatDeleted = 'chat_deleted',
+	AllNonStarredChatsDeleted = 'all_non_starred_chats_deleted',
 
 	SavedPromptCreated = 'saved_prompt_created',
 	SavedPromptUpdated = 'saved_prompt_updated',
@@ -32,6 +33,11 @@ export enum PostHogEvent {
 	AgentMemoryDeleted = 'agent_memory_deleted',
 	AgentMemoryEnabledUpdated = 'agent_memory_enabled_updated',
 	AgentMemoryExtractionCompleted = 'agent_memory_extraction_completed',
+
+	SlackConfigured = 'slack_configured',
+	TeamsConfigured = 'teams_configured',
+	TelegramConfigured = 'telegram_configured',
+	WhatsappConfigured = 'whatsapp_configured',
 }
 
 /**

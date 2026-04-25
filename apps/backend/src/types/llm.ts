@@ -1,20 +1,30 @@
+import type { AmazonBedrockLanguageModelOptions } from '@ai-sdk/amazon-bedrock';
 import type { AnthropicProviderOptions } from '@ai-sdk/anthropic';
+import type { OpenAIResponsesProviderOptions as AzureOpenAIResponsesProviderOptions } from '@ai-sdk/azure';
 import type { GoogleGenerativeAIProviderOptions } from '@ai-sdk/google';
 import type { MistralLanguageModelOptions } from '@ai-sdk/mistral';
 import type { OpenAIResponsesProviderOptions } from '@ai-sdk/openai';
-import type { OpenRouterProviderOptions } from '@openrouter/ai-sdk-provider';
+import { LLM_PROVIDERS, type LlmProvider } from '@nao/shared/types';
+import type { LanguageModelV3, OpenRouterProviderOptions } from '@openrouter/ai-sdk-provider';
 import type { OllamaChatProviderOptions } from 'ai-sdk-ollama';
 import { z } from 'zod/v4';
 
 import { TokenCost } from './chat';
 
-export const llmProviderSchema = z.enum(['openai', 'anthropic', 'google', 'mistral', 'openrouter', 'ollama']);
-export type LlmProvider = z.infer<typeof llmProviderSchema>;
+export const llmProviderSchema = z.enum(LLM_PROVIDERS);
+
+export const llmSelectedModelSchema = z.object({
+	provider: llmProviderSchema,
+	modelId: z.string(),
+});
+
+export type ProviderSettings = { apiKey: string; baseURL?: string; credentials?: Record<string, string> };
 
 export const llmConfigSchema = z.object({
 	id: z.string(),
 	provider: llmProviderSchema,
 	apiKeyPreview: z.string().nullable(),
+	credentialPreviews: z.record(z.string(), z.string()).nullable(),
 	enabledModels: z.array(z.string()).nullable(),
 	baseUrl: z.string().url().nullable(),
 	createdAt: z.date(),
@@ -32,6 +42,9 @@ export type ProviderConfigMap = {
 	mistral: MistralLanguageModelOptions;
 	openrouter: OpenRouterProviderOptions;
 	ollama: Flatten<OllamaChatProviderOptions>;
+	bedrock: AmazonBedrockLanguageModelOptions;
+	vertex: GoogleGenerativeAIProviderOptions;
+	azure: AzureOpenAIResponsesProviderOptions;
 };
 
 /** Model definition with provider-specific config type */
@@ -44,14 +57,42 @@ type ProviderModel<P extends LlmProvider> = {
 	costPerM?: TokenCost;
 };
 
-/** Provider configuration with typed models */
-type ProviderConfig<P extends LlmProvider> = {
+/** An additional credential field (e.g. AWS Access Key ID) */
+export type AuthField = {
+	name: string;
+	label: string;
+	envVar: string;
+	secret?: boolean;
+	multiline?: boolean;
+	placeholder?: string;
+};
+
+/** Describes how a provider authenticates */
+export type ProviderAuth = {
+	apiKey: 'required' | 'optional' | 'none';
+	alternativeEnvVars?: string[];
+	hint?: string;
+	extraFields?: AuthField[];
+};
+
+/** Data-only provider config (no SDK imports, safe for frontend) */
+export type ProviderMeta<P extends LlmProvider> = {
+	auth: ProviderAuth;
 	envVar: string;
 	baseUrlEnvVar?: string;
-	defaultOptions?: ProviderConfigMap[P];
 	models: readonly ProviderModel<P>[];
-	/** Preferred cheap model id for memory extraction. */
 	extractorModelId: string;
+	summaryModelId: string;
+};
+
+export type ProviderMetaMap = {
+	[P in LlmProvider]: ProviderMeta<P>;
+};
+
+/** Full provider configuration with SDK create function (backend-only) */
+type ProviderConfig<P extends LlmProvider> = ProviderMeta<P> & {
+	create: (settings: ProviderSettings, modelId: string) => LanguageModelV3;
+	defaultOptions?: ProviderConfigMap[P];
 };
 
 /** Full providers type - each key gets its own config type */
@@ -59,11 +100,5 @@ export type LlmProvidersType = {
 	[P in LlmProvider]: ProviderConfig<P>;
 };
 
-/** A provider + model selection */
-export type ModelSelection = {
-	provider: LlmProvider;
-	modelId: string;
-};
-
-export const LLM_INFERENCE_TYPES = ['memory_extraction'] as const;
+export const LLM_INFERENCE_TYPES = ['memory_extraction', 'compaction', 'title_generation'] as const;
 export type LlmInferenceType = (typeof LLM_INFERENCE_TYPES)[number];

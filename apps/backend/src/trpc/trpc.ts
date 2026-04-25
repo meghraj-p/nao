@@ -1,10 +1,10 @@
+import type { UserRole } from '@nao/shared/types';
 import { initTRPC, TRPCError } from '@trpc/server';
 import type { CreateFastifyContextOptions } from '@trpc/server/adapters/fastify';
 import superjson from 'superjson';
 
 import { getAuth } from '../auth';
 import * as projectQueries from '../queries/project.queries';
-import type { UserRole } from '../types/project';
 import { HandlerError } from '../utils/error';
 import { convertHeaders } from '../utils/utils';
 
@@ -17,6 +17,7 @@ export const createContext = async (opts: CreateFastifyContextOptions) => {
 	const session = await auth?.api.getSession({ headers });
 	return {
 		session,
+		selectedProjectId: headers.get('x-nao-project-id'),
 	};
 };
 
@@ -53,7 +54,7 @@ export const protectedProcedure = publicProcedure.use(async ({ ctx, next }) => {
 });
 
 export const projectProtectedProcedure = protectedProcedure.use(async ({ ctx, next }) => {
-	const project = await projectQueries.getProjectByUserId(ctx.user.id);
+	const project = await projectQueries.getProjectByUserId(ctx.user.id, ctx.selectedProjectId);
 	if (!project) {
 		throw new TRPCError({ code: 'BAD_REQUEST', message: 'No project configured' });
 	}

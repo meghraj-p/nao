@@ -1,9 +1,12 @@
+import AzureIcon from '@/components/icons/azure.svg';
 import ClaudeIcon from '@/components/icons/claude.svg';
 import GoogleIcon from '@/components/icons/google.svg';
 import MistralIcon from '@/components/icons/mistral.svg';
 import OpenAIIcon from '@/components/icons/openai.svg';
 import OpenRouterIcon from '@/components/icons/openrouter.svg';
 import OllamaIcon from '@/components/icons/ollama.svg';
+import BedrockIcon from '@/components/icons/bedrock.svg';
+import GoogleVertexIcon from '@/components/icons/google-vertex.svg';
 
 import { cn } from '@/lib/utils';
 
@@ -22,6 +25,12 @@ export function LlmProviderIcon({ provider, className: customClassName }: { prov
 			return <OpenRouterIcon className={className} />;
 		case 'ollama':
 			return <OllamaIcon className={className} />;
+		case 'bedrock':
+			return <BedrockIcon className={className} />;
+		case 'vertex':
+			return <GoogleVertexIcon className={className} />;
+		case 'azure':
+			return <AzureIcon className={className} />;
 		default:
 			return null;
 	}

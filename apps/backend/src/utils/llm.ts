@@ -1,8 +1,10 @@
+import type { LlmProvider, LlmSelectedModel } from '@nao/shared/types';
+
 import { createProviderModel, getDefaultModelId, LLM_PROVIDERS, type ProviderModelResult } from '../agents/providers';
 import * as projectLlmConfigQueries from '../queries/project-llm-config.queries';
-import { LlmProvider, ModelSelection } from '../types/llm';
+import type { ProviderSettings } from '../types/llm';
+
 export { getDefaultModelId };
-export type { ModelSelection };
 
 /** Get the API key from environment for a provider */
 export function getEnvApiKey(provider: LlmProvider): string | undefined {
@@ -15,9 +17,13 @@ export function getEnvBaseUrl(provider: LlmProvider): string | undefined {
 	return baseUrlEnvVar ? process.env[baseUrlEnvVar] : undefined;
 }
 
-/** Check if a provider has an API key configured via environment */
+/** Check if a provider has authentication configured via environment */
 export function hasEnvApiKey(provider: LlmProvider): boolean {
-	return !!getEnvApiKey(provider);
+	if (getEnvApiKey(provider)) {
+		return true;
+	}
+	const { alternativeEnvVars } = LLM_PROVIDERS[provider].auth;
+	return alternativeEnvVars?.every((v) => process.env[v]) ?? false;
 }
 
 /** Get all providers that have API keys configured via environment */
@@ -56,11 +62,38 @@ export function getKnownModelIds(provider: LlmProvider): string[] {
 }
 
 /** Get model selections for all env-configured providers */
-export function getEnvModelSelections(): ModelSelection[] {
+export function getEnvModelSelections(): LlmSelectedModel[] {
 	return getEnvProviders().map((provider) => ({
 		provider,
 		modelId: getDefaultModelId(provider),
 	}));
+}
+
+/** Resolve API key + base URL for a provider from DB config or env vars. */
+export async function resolveProviderSettings(
+	projectId: string,
+	provider: LlmProvider,
+): Promise<ProviderSettings | null> {
+	const config = await projectLlmConfigQueries.getProjectLlmConfigByProvider(projectId, provider);
+	if (config) {
+		return {
+			apiKey: config.apiKey,
+			...(config.baseUrl && { baseURL: config.baseUrl }),
+			...(config.credentials && { credentials: config.credentials }),
+		};
+	}
+
+	const envApiKey = getEnvApiKey(provider);
+	if (envApiKey) {
+		const envBaseUrl = getEnvBaseUrl(provider);
+		return { apiKey: envApiKey, ...(envBaseUrl && { baseURL: envBaseUrl }) };
+	}
+
+	if (hasEnvApiKey(provider)) {
+		return { apiKey: '' };
+	}
+
+	return null;
 }
 
 /**
@@ -76,7 +109,11 @@ export async function resolveProviderModel(
 	if (config) {
 		return createProviderModel(
 			provider,
-			{ apiKey: config.apiKey, ...(config.baseUrl && { baseURL: config.baseUrl }) },
+			{
+				apiKey: config.apiKey,
+				...(config.baseUrl && { baseURL: config.baseUrl }),
+				...(config.credentials && { credentials: config.credentials }),
+			},
 			modelId,
 		);
 	}
@@ -91,14 +128,41 @@ export async function resolveProviderModel(
 		);
 	}
 
+	if (hasEnvApiKey(provider)) {
+		return createProviderModel(provider, { apiKey: '' }, modelId);
+	}
+
 	return null;
+}
+
+/**
+ * Resolve the model to use for background tasks (memory extraction, compaction, title generation).
+ * Priority: NAO_ANNOTATION_MODEL env var > first enabled model in project config > provider default.
+ */
+export async function resolveAnnotationModelId(
+	projectId: string,
+	provider: LlmProvider,
+	fallbackModelId: string,
+): Promise<string> {
+	const envOverride = process.env.NAO_ANNOTATION_MODEL;
+	if (envOverride) {
+		return envOverride;
+	}
+
+	const config = await projectLlmConfigQueries.getProjectLlmConfigByProvider(projectId, provider);
+	const enabledModels = config?.enabledModels ?? [];
+	if (enabledModels.length > 0) {
+		return enabledModels[0];
+	}
+
+	return fallbackModelId;
 }
 
 export const getProjectAvailableModels = async (
 	projectId: string,
-): Promise<Array<{ provider: LlmProvider; modelId: string }>> => {
+): Promise<Array<{ provider: LlmProvider; modelId: string; name: string }>> => {
 	const configs = await projectLlmConfigQueries.getProjectLlmConfigs(projectId);
-	const models: Array<{ provider: LlmProvider; modelId: string }> = [];
+	const models: Array<{ provider: LlmProvider; modelId: string; name: string }> = [];
 
 	for (const config of configs) {
 		const provider = config.provider as LlmProvider;
@@ -106,17 +170,23 @@ export const getProjectAvailableModels = async (
 
 		if (enabledModels.length === 0) {
 			// If no models explicitly enabled, add the default
-			models.push({ provider, modelId: getDefaultModelId(provider) });
+			const defaultModelId = getDefaultModelId(provider);
+			models.push({ provider, modelId: defaultModelId, name: getModelName(provider, defaultModelId) });
 		} else {
 			for (const modelId of enabledModels) {
-				models.push({ provider, modelId });
+				models.push({ provider, modelId, name: getModelName(provider, modelId) });
 			}
 		}
 	}
 
 	// Also add env-configured providers with their defaults
-	const envSelections = getEnvModelSelections().filter((s) => !configs.some((c) => c.provider === s.provider));
+	const envSelections = getEnvModelSelections()
+		.filter((s) => !configs.some((c) => c.provider === s.provider))
+		.map((s) => ({ ...s, name: getModelName(s.provider, s.modelId) }));
 	models.push(...envSelections);
 
 	return models;
 };
+
+const getModelName = (provider: LlmProvider, modelId: string): string =>
+	LLM_PROVIDERS[provider].models.find((m) => m.id === modelId)?.name ?? modelId;

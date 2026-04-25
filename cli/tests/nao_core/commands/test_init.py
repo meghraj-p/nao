@@ -12,6 +12,7 @@ from nao_core.commands.init import (
     create_empty_structure,
     setup_project_name,
 )
+from nao_core.config import NaoConfigError
 from nao_core.config.exceptions import InitError
 
 
@@ -67,6 +68,8 @@ class TestCreateEmptyStructure:
             "repos",
             "agent/tools",
             "agent/mcps",
+            "agent/skills",
+            "tests",
         ]
 
         for folder in expected_folders:
@@ -207,6 +210,23 @@ class TestSetupProjectName:
 
         assert "cancelled" in str(exc_info.value).lower()
 
+    @patch("nao_core.commands.init.ask_confirm")
+    @patch("nao_core.commands.init.NaoConfig.try_load")
+    def test_fails_fast_on_invalid_config_file(self, mock_try_load, mock_confirm, tmp_path: Path, monkeypatch):
+        """Raises InitError when existing config is invalid."""
+        monkeypatch.chdir(tmp_path)
+
+        # Create invalid config file (missing required fields)
+        (tmp_path / "nao_config.yaml").write_text("invalid: yaml\nwithout: project_name\n")
+
+        mock_try_load.side_effect = NaoConfigError("Failed to load nao_config.yaml: validation error")
+
+        with pytest.raises(InitError) as exc_info:
+            setup_project_name()
+
+        assert "invalid nao_config.yaml" in str(exc_info.value)
+        mock_confirm.assert_not_called()
+
 
 class TestNaoConfigPromptDatabases:
     """Tests for NaoConfig._prompt_databases method."""
@@ -288,9 +308,10 @@ class TestNaoConfigPromptLLM:
 
         mock_confirm.return_value = False
 
-        result = NaoConfig._prompt_llm()
+        llm, enable_ai_summary = NaoConfig._prompt_llm()
 
-        assert result is None
+        assert llm is None
+        assert enable_ai_summary is False
 
     @patch("nao_core.config.base.ask_confirm")
     @patch("nao_core.config.llm.LLMConfig.promptConfig")
@@ -302,10 +323,12 @@ class TestNaoConfigPromptLLM:
         mock_prompt_config.return_value = mock_llm
         mock_confirm.return_value = True
 
-        result = NaoConfig._prompt_llm()
+        result_llm, enable_ai_summary = NaoConfig._prompt_llm()
 
-        assert result is not None
-        assert result.api_key == "sk-test-key"
+        assert result_llm is not None
+        assert result_llm.api_key == "sk-test-key"
+        assert enable_ai_summary is False
+        mock_prompt_config.assert_called_once_with(prompt_annotation_model=False)
 
     @patch("nao_core.config.llm.ask_text")
     @patch("nao_core.config.llm.ask_select")
@@ -321,6 +344,47 @@ class TestNaoConfigPromptLLM:
 
         with pytest.raises(KeyboardInterrupt):
             LLMConfig.promptConfig()
+
+
+class TestNaoConfigAiSummaryTemplates:
+    """Tests for NaoConfig._configure_ai_summary_templates."""
+
+    def test_skips_when_llm_not_configured(self):
+        """Does not modify templates when llm is not configured."""
+        from nao_core.config import NaoConfig
+        from nao_core.config.databases.base import DatabaseTemplate
+        from nao_core.config.databases.duckdb import DuckDBConfig
+
+        db = DuckDBConfig(name="test-db", path=":memory:")
+        result = NaoConfig._configure_ai_summary_templates([db], llm=None, enable_ai_summary=True)
+
+        assert DatabaseTemplate.AI_SUMMARY not in result[0].templates
+
+    def test_adds_ai_summary_template_when_enabled(self):
+        """Adds ai_summary template when enabled."""
+        from nao_core.config import LLMConfig, LLMProvider, NaoConfig
+        from nao_core.config.databases.base import DatabaseTemplate
+        from nao_core.config.databases.duckdb import DuckDBConfig
+
+        db = DuckDBConfig(name="test-db", path=":memory:")
+        llm = LLMConfig(provider=LLMProvider.OPENAI, api_key="sk-test")
+
+        result = NaoConfig._configure_ai_summary_templates([db], llm=llm, enable_ai_summary=True)
+
+        assert DatabaseTemplate.AI_SUMMARY in result[0].templates
+
+    def test_does_not_add_ai_summary_template_when_disabled(self):
+        """Keeps templates unchanged when ai_summary is disabled."""
+        from nao_core.config import LLMConfig, LLMProvider, NaoConfig
+        from nao_core.config.databases.base import DatabaseTemplate
+        from nao_core.config.databases.duckdb import DuckDBConfig
+
+        db = DuckDBConfig(name="test-db", path=":memory:")
+        llm = LLMConfig(provider=LLMProvider.OPENAI, api_key="sk-test")
+
+        result = NaoConfig._configure_ai_summary_templates([db], llm=llm, enable_ai_summary=False)
+
+        assert DatabaseTemplate.AI_SUMMARY not in result[0].templates
 
 
 class TestNaoConfigPromptSlack:
@@ -541,15 +605,15 @@ class TestInitCommand:
     @patch("nao_core.commands.init.setup_project_name")
     @patch("nao_core.commands.init.UI")
     def test_init_handles_init_error(self, mock_ui, mock_setup_project_name):
-        """Init command handles InitError gracefully."""
+        """Init command prints error and exits non-zero on InitError."""
         from nao_core.commands.init import init
 
         mock_setup_project_name.side_effect = EmptyProjectNameError()
 
-        # Should not raise, just print error
-        init()
+        with pytest.raises(SystemExit) as exc_info:
+            init()
 
-        # Verify error was printed
+        assert exc_info.value.code == 1
         mock_ui.error.assert_called()
         calls = [str(c) for c in mock_ui.error.call_args_list]
         assert any("cannot be empty" in c for c in calls)

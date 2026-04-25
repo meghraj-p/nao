@@ -1,4 +1,5 @@
 import json
+import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -9,7 +10,7 @@ import numpy as np
 import pandas as pd
 from cyclopts import Parameter
 
-from nao_core.config import NaoConfig
+from nao_core.config import NaoConfig, resolve_project_path
 from nao_core.ui import UI
 
 from .case import TESTS_FOLDER, TestCase, discover_tests
@@ -119,7 +120,10 @@ def check_dataframe(
     actual = round_numeric(actual, decimals=2)
     expected = round_numeric(expected, decimals=2)
 
-    # Check for exact match first
+    # Sort rows by all columns (in alphabetic order) to ignore row order
+    actual = actual.sort_values(by=sorted_cols).reset_index(drop=True)
+    expected = expected.sort_values(by=sorted_cols).reset_index(drop=True)
+
     if actual.equals(expected):
         return True, "match", None
 
@@ -167,12 +171,17 @@ def check_dataframe(
     return False, "values differ", comparison
 
 
-def run_test(test_case: TestCase, model: ModelConfig) -> TestRunResult:
+def run_test(
+    test_case: TestCase,
+    model: ModelConfig,
+    email: str | None = None,
+    password: str | None = None,
+) -> TestRunResult:
     """Run a single test case with a specific model. Returns TestRunResult."""
     UI.print(f"[bold]Running:[/bold] {test_case.name} [dim]({model})[/dim]")
     UI.print(f"[dim]  Prompt: {test_case.prompt}[/dim]")
 
-    client = get_client()
+    client = get_client(email=email, password=password)
 
     try:
         result = client.run_test(test_case, provider=model.provider, model_id=model.model_id)
@@ -269,6 +278,22 @@ def save_results(results: list[TestRunResult], output_dir: Path) -> Path:
     return output_file
 
 
+def filter_test_cases(test_cases: list[TestCase], selected_test: str | None) -> list[TestCase]:
+    """Filter test cases to a single selected test, if provided."""
+    if not selected_test:
+        return test_cases
+
+    matches = [tc for tc in test_cases if tc.name == selected_test or tc.file_path.stem == selected_test]
+    if not matches:
+        available = ", ".join(tc.name for tc in test_cases)
+        raise ValueError(f"Test not found: {selected_test}. Available tests: {available}")
+    if len(matches) > 1:
+        names = ", ".join(f"{tc.name} ({tc.file_path.name})" for tc in matches)
+        raise ValueError(f"Multiple tests match '{selected_test}': {names}")
+
+    return [matches[0]]
+
+
 def test(
     models: Annotated[
         list[str] | None,
@@ -284,6 +309,27 @@ def test(
             help="Number of parallel threads for running tests.",
         ),
     ] = 1,
+    select: Annotated[
+        str | None,
+        Parameter(
+            name=["-s", "--select"],
+            help="Run only one test by name or yaml filename stem.",
+        ),
+    ] = None,
+    username: Annotated[
+        str | None,
+        Parameter(
+            name=["-u", "--username"],
+            help="Email for authentication. Falls back to NAO_USERNAME env var.",
+        ),
+    ] = None,
+    password: Annotated[
+        str | None,
+        Parameter(
+            name=["--password"],
+            help="Password for authentication. Falls back to NAO_PASSWORD env var.",
+        ),
+    ] = None,
 ):
     """Run tests from the tests/ folder.
 
@@ -292,10 +338,15 @@ def test(
         nao test -m openai:gpt-4.1
         nao test -m openai:gpt-4.1 -m anthropic:claude-sonnet-4-20250514
         nao test --threads 4
+        nao test -s test_name
+        nao test -u user@example.com --password secret
     """
+    email = username or os.environ.get("NAO_USERNAME")
+    pwd = password or os.environ.get("NAO_PASSWORD")
+
     UI.info("\n🧪 Running nao tests...\n")
 
-    config = NaoConfig.try_load(exit_on_error=True)
+    config = NaoConfig.try_load(resolve_project_path(), exit_on_error=True)
     assert config is not None
 
     # Parse models
@@ -317,6 +368,12 @@ def test(
         UI.warn("No tests to run.")
         return
 
+    try:
+        test_cases = filter_test_cases(test_cases, select)
+    except ValueError as e:
+        UI.error(str(e))
+        return
+
     total_runs = len(test_cases) * len(model_configs)
     UI.print(f"[bold]Found {len(test_cases)} test(s) × {len(model_configs)} model(s) = {total_runs} run(s)[/bold]")
     if threads > 1:
@@ -328,15 +385,13 @@ def test(
 
     results: list[TestRunResult] = []
     if threads == 1:
-        # Sequential execution
         for test_case, model in test_runs:
-            result = run_test(test_case, model)
+            result = run_test(test_case, model, email=email, password=pwd)
             results.append(result)
             UI.print("")
     else:
-        # Parallel execution
         with ThreadPoolExecutor(max_workers=threads) as executor:
-            futures = {executor.submit(run_test, tc, m): (tc, m) for tc, m in test_runs}
+            futures = {executor.submit(run_test, tc, m, email=email, password=pwd): (tc, m) for tc, m in test_runs}
             for future in as_completed(futures):
                 result = future.result()
                 results.append(result)

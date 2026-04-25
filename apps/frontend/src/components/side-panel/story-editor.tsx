@@ -1,22 +1,25 @@
-import { memo, useMemo, useEffect } from 'react';
-import { Node, mergeAttributes } from '@tiptap/core';
-import { useEditor, EditorContent, ReactNodeViewRenderer, NodeViewWrapper } from '@tiptap/react';
-import { DragHandle } from '@tiptap/extension-drag-handle-react';
-import StarterKit from '@tiptap/starter-kit';
-import { Markdown } from 'tiptap-markdown';
-import { Streamdown } from 'streamdown';
-import { GripVertical } from 'lucide-react';
-import { StoryChartEmbed } from './story-chart-embed';
-import { StoryTableEmbed } from './story-table-embed';
-import type { ReactNodeViewProps, Editor } from '@tiptap/react';
-import type { Segment } from '@/lib/story-segments';
 import {
 	getGridClass,
 	parseChartAttributes,
 	parseChartBlock,
 	parseTableBlock,
 	splitCodeIntoSegments,
-} from '@/lib/story-segments';
+} from '@nao/shared/story-segments';
+import { Extension, mergeAttributes, Node } from '@tiptap/core';
+import { DragHandle } from '@tiptap/extension-drag-handle-react';
+import { TableKit } from '@tiptap/extension-table';
+import { Markdown } from '@tiptap/markdown';
+import { EditorContent, NodeViewWrapper, ReactNodeViewRenderer, useEditor } from '@tiptap/react';
+import StarterKit from '@tiptap/starter-kit';
+import { GripVertical } from 'lucide-react';
+import { memo, useEffect, useMemo, useRef } from 'react';
+import { Streamdown } from 'streamdown';
+
+import { StoryChartEmbed } from './story-chart-embed';
+import { StoryTableEmbed } from './story-table-embed';
+import type { Segment } from '@nao/shared/story-segments';
+import type { Editor as CoreEditor } from '@tiptap/core';
+import type { Editor, ReactNodeViewProps } from '@tiptap/react';
 
 // ---------------------------------------------------------------------------
 // Encoding helpers for data-raw attributes
@@ -35,16 +38,19 @@ function decodeFromAttr(encoded: string): string {
  * Tiptap's DOMParser can match against custom node extensions.
  */
 export function preprocessForEditor(code: string): string {
+	// Each embed is wrapped in a <div> so that `marked` emits an "html" token
+	// instead of folding the custom element into a paragraph token (marked only
+	// recognises standard HTML block elements like <div>).
 	let result = code.replace(/<grid\s+[^>]*>[\s\S]*?<\/grid>/g, (match) => {
-		return `<grid-embed data-raw="${encodeForAttr(match)}"></grid-embed>`;
+		return `<div><grid-embed data-raw="${encodeForAttr(match)}"></grid-embed></div>\n\n`;
 	});
 
 	result = result.replace(/<chart\s+[^/>]*\/?>/g, (match) => {
-		return `<chart-embed data-raw="${encodeForAttr(match)}"></chart-embed>`;
+		return `<div><chart-embed data-raw="${encodeForAttr(match)}"></chart-embed></div>\n\n`;
 	});
 
 	result = result.replace(/<table\s+[^/>]*\/?>/g, (match) => {
-		return `<table-embed data-raw="${encodeForAttr(match)}"></table-embed>`;
+		return `<div><table-embed data-raw="${encodeForAttr(match)}"></table-embed></div>\n\n`;
 	});
 
 	return result;
@@ -120,16 +126,9 @@ const ChartBlock = Node.create({
 		return ReactNodeViewRenderer(ChartBlockView);
 	},
 
-	addStorage() {
-		return {
-			markdown: {
-				serialize(state: any, node: any) {
-					state.write(node.attrs.rawTag);
-					state.closeBlock(node);
-				},
-				parse: {},
-			},
-		};
+	renderMarkdown(node) {
+		const rawTag = typeof node.attrs?.rawTag === 'string' ? node.attrs.rawTag : '';
+		return `${rawTag}\n\n`;
 	},
 });
 
@@ -203,16 +202,9 @@ const TableBlock = Node.create({
 		return ReactNodeViewRenderer(TableBlockView);
 	},
 
-	addStorage() {
-		return {
-			markdown: {
-				serialize(state: any, node: any) {
-					state.write(node.attrs.rawTag);
-					state.closeBlock(node);
-				},
-				parse: {},
-			},
-		};
+	renderMarkdown(node) {
+		const rawTag = typeof node.attrs?.rawTag === 'string' ? node.attrs.rawTag : '';
+		return `${rawTag}\n\n`;
 	},
 });
 
@@ -294,14 +286,53 @@ const GridBlock = Node.create({
 		return ReactNodeViewRenderer(GridBlockView);
 	},
 
-	addStorage() {
+	renderMarkdown(node) {
+		const rawContent = typeof node.attrs?.rawContent === 'string' ? node.attrs.rawContent : '';
+		return `${rawContent}\n\n`;
+	},
+});
+
+// ---------------------------------------------------------------------------
+// TableDeleteShortcuts – lets users delete markdown tables via keyboard
+// ---------------------------------------------------------------------------
+// ProseMirror's table plugin intercepts Backspace/Delete to handle cell
+// operations, which prevents deletion of the table node itself. This
+// extension runs at higher priority so its shortcuts fire first:
+//   - Backspace/Delete in an empty table → remove the table
+//   - Mod-Shift-Backspace in any table   → force-remove the table
+
+const TableDeleteShortcuts = Extension.create({
+	name: 'tableDeleteShortcuts',
+	priority: 150,
+
+	addKeyboardShortcuts() {
+		const findEnclosingTable = (editor: CoreEditor) => {
+			const { $anchor } = editor.state.selection;
+			for (let depth = $anchor.depth; depth > 0; depth--) {
+				const node = $anchor.node(depth);
+				if (node.type.name === 'table') {
+					return node;
+				}
+			}
+			return null;
+		};
+
+		const deleteIfEmpty = ({ editor }: { editor: CoreEditor }): boolean => {
+			const table = findEnclosingTable(editor);
+			if (table && !table.textContent) {
+				return editor.commands.deleteTable();
+			}
+			return false;
+		};
+
 		return {
-			markdown: {
-				serialize(state: any, node: any) {
-					state.write(node.attrs.rawContent);
-					state.closeBlock(node);
-				},
-				parse: {},
+			Backspace: deleteIfEmpty,
+			Delete: deleteIfEmpty,
+			'Mod-Shift-Backspace': ({ editor }) => {
+				if (findEnclosingTable(editor)) {
+					return editor.commands.deleteTable();
+				}
+				return false;
 			},
 		};
 	},
@@ -315,10 +346,12 @@ const EDITOR_EXTENSIONS = [
 	StarterKit.configure({
 		dropcursor: { width: 3, class: 'drop-cursor' },
 	}),
+	TableKit,
+	TableDeleteShortcuts,
 	Markdown.configure({
-		html: true,
-		transformPastedText: true,
-		transformCopiedText: true,
+		markedOptions: {
+			gfm: true,
+		},
 	}),
 	ChartBlock,
 	TableBlock,
@@ -328,14 +361,36 @@ const EDITOR_EXTENSIONS = [
 interface StoryEditorProps {
 	code: string;
 	editorRef: React.MutableRefObject<Editor | null>;
+	onSave?: () => void;
 }
 
-export const StoryEditor = memo(function StoryEditor({ code, editorRef }: StoryEditorProps) {
+export const StoryEditor = memo(function StoryEditor({ code, editorRef, onSave }: StoryEditorProps) {
 	const processedContent = useMemo(() => preprocessForEditor(code), [code]);
+	const onSaveRef = useRef(onSave);
+	onSaveRef.current = onSave;
+
+	const extensions = useMemo(
+		() => [
+			...EDITOR_EXTENSIONS,
+			Extension.create({
+				name: 'saveShortcut',
+				addKeyboardShortcuts() {
+					return {
+						'Mod-s': () => {
+							onSaveRef.current?.();
+							return true;
+						},
+					};
+				},
+			}),
+		],
+		[],
+	);
 
 	const editor = useEditor({
-		extensions: EDITOR_EXTENSIONS,
+		extensions,
 		content: processedContent,
+		contentType: 'markdown',
 	});
 
 	useEffect(() => {
@@ -352,7 +407,7 @@ export const StoryEditor = memo(function StoryEditor({ code, editorRef }: StoryE
 		if (getEditorMarkdown(editor) === code) {
 			return;
 		}
-		editor.commands.setContent(processedContent, { emitUpdate: false });
+		editor.commands.setContent(processedContent, { emitUpdate: false, contentType: 'markdown' });
 	}, [editor, code, processedContent]);
 
 	return (
@@ -370,6 +425,5 @@ export const StoryEditor = memo(function StoryEditor({ code, editorRef }: StoryE
 });
 
 export function getEditorMarkdown(editor: Editor): string {
-	const storage = editor.storage as Record<string, any>;
-	return storage.markdown.getMarkdown();
+	return editor.getMarkdown();
 }

@@ -3,6 +3,9 @@ import { getToolName, isToolUIPart } from 'ai';
 
 import { DBMessagePart, NewMessagePart } from '../db/abstractSchema';
 import { UIMessagePart, UIToolPart } from '../types/chat';
+import { buildImageUrl } from './image';
+
+const PROVIDER_EXECUTED_TOOLS = new Set(['web_search', 'web_fetch', 'google_search']);
 
 /**
  * Converts a list of UI message parts to a list of database message parts.
@@ -54,9 +57,24 @@ export const convertUIPartToDBPart = (
 				reasoningText: part.text,
 				providerMetadata: part.providerMetadata,
 			};
+		case 'file':
+			return {
+				messageId,
+				order,
+				type: 'file',
+				mediaType: part.mediaType,
+				imageId: extractImageIdFromUrl(part.url),
+			};
 		case 'step-start':
 			return {
 				type: 'step-start',
+				messageId,
+				order,
+			};
+		case 'data-compaction':
+			return {
+				type: 'data-compaction',
+				text: part.data.summary,
 				messageId,
 				order,
 			};
@@ -83,7 +101,7 @@ export const convertDBPartToUIPart = (part: DBMessagePart): UIMessagePart | unde
 			rawInput: part.toolRawInput as any,
 			output: part.toolOutput as any,
 			errorText: part.toolErrorText as any,
-			providerExecuted: false,
+			providerExecuted: PROVIDER_EXECUTED_TOOLS.has(part.toolName!),
 			approval: part.toolApprovalId
 				? {
 						id: part.toolApprovalId!,
@@ -108,9 +126,25 @@ export const convertDBPartToUIPart = (part: DBMessagePart): UIMessagePart | unde
 				text: part.reasoningText!,
 				providerMetadata: part.providerMetadata ?? undefined,
 			};
+		case 'file':
+			if (!part.imageId) {
+				return undefined;
+			}
+			return {
+				type: 'file',
+				mediaType: part.mediaType!,
+				url: buildImageUrl(part.imageId),
+			};
 		case 'step-start':
 			return {
 				type: 'step-start',
+			};
+		case 'data-compaction':
+			return {
+				type: 'data-compaction',
+				data: {
+					summary: part.text!,
+				},
 			};
 		default:
 			return undefined;
@@ -120,3 +154,10 @@ export const convertDBPartToUIPart = (part: DBMessagePart): UIMessagePart | unde
 const isToolDBPart = (part: DBMessagePart): part is DBMessagePart & { type: UIToolPart['type'] } => {
 	return part.type.startsWith('tool-') || part.type === 'dynamic-tool';
 };
+
+const IMAGE_URL_PATTERN = /^\/i\/([a-f0-9-]+)$/;
+
+function extractImageIdFromUrl(url: string): string | null {
+	const match = url.match(IMAGE_URL_PATTERN);
+	return match?.[1] ?? null;
+}

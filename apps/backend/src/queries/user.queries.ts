@@ -1,6 +1,7 @@
+import crypto from 'crypto';
 import { count, eq } from 'drizzle-orm';
 
-import s, { NewAccount, NewProjectMember, NewUser, User } from '../db/abstractSchema';
+import s, { NewAccount, NewUser, User } from '../db/abstractSchema';
 import { db } from '../db/db';
 import { takeFirstOrThrow } from '../utils/queries';
 
@@ -43,12 +44,39 @@ export const getFirst = async (): Promise<User | null> => {
 	return user ?? null;
 };
 
-export const create = async (user: NewUser, account: NewAccount, member: NewProjectMember): Promise<User> => {
+export const createMessagingProviderCode = (): string => {
+	return crypto.randomBytes(6).toString('base64url').slice(0, 8).toLowerCase();
+};
+
+export const getByMessagingProviderCode = async (code: string): Promise<User | null> => {
+	const [user] = await db.select().from(s.user).where(eq(s.user.messagingProviderCode, code)).execute();
+	return user ?? null;
+};
+
+export const regenerateMessagingProviderCode = async (userId: string): Promise<string> => {
+	const code = createMessagingProviderCode();
+	await db.update(s.user).set({ messagingProviderCode: code }).where(eq(s.user.id, userId)).execute();
+	return code;
+};
+
+export const getGithubToken = async (userId: string): Promise<string | null> => {
+	const [user] = await db
+		.select({ githubAccessToken: s.user.githubAccessToken })
+		.from(s.user)
+		.where(eq(s.user.id, userId))
+		.execute();
+	return user?.githubAccessToken ?? null;
+};
+
+export const updateGithubToken = async (userId: string, token: string | null): Promise<void> => {
+	await db.update(s.user).set({ githubAccessToken: token }).where(eq(s.user.id, userId)).execute();
+};
+
+export const create = async (user: NewUser, account: NewAccount): Promise<User> => {
 	return await db.transaction(async (tx) => {
+		user.messagingProviderCode = createMessagingProviderCode();
 		const [created] = await tx.insert(s.user).values(user).returning().execute();
 		await tx.insert(s.account).values(account).execute();
-		member.userId = created.id;
-		await tx.insert(s.projectMember).values(member).execute();
 		return created;
 	});
 };

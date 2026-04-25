@@ -8,8 +8,8 @@ import { trpc } from '@/main';
 
 interface UseStoryViewerVersionActionsParams {
 	chatId: string;
-	storyId: string;
-	currentVersionTitle?: string;
+	storySlug: string;
+	storyTitle?: string;
 	currentVersionCode?: string;
 	isViewingLatest: boolean;
 	tiptapEditorRef: MutableRefObject<TiptapEditor | null>;
@@ -18,27 +18,48 @@ interface UseStoryViewerVersionActionsParams {
 
 export const useStoryViewerVersionActions = ({
 	chatId,
-	storyId,
-	currentVersionTitle,
+	storySlug,
+	storyTitle,
 	currentVersionCode,
 	isViewingLatest,
 	tiptapEditorRef,
 	setViewMode,
 }: UseStoryViewerVersionActionsParams) => {
 	const queryClient = useQueryClient();
+	const latestStoryQueryKey = trpc.story.getLatest.queryKey({ chatId, storySlug });
 
 	const createVersionMutation = useMutation(
 		trpc.story.createVersion.mutationOptions({
+			onMutate: async (variables) => {
+				await queryClient.cancelQueries({ queryKey: latestStoryQueryKey });
+
+				const previousLatestStory = queryClient.getQueryData(latestStoryQueryKey);
+				queryClient.setQueryData(latestStoryQueryKey, (latestStory) =>
+					latestStory && typeof latestStory === 'object'
+						? { ...latestStory, code: variables.code }
+						: latestStory,
+				);
+
+				return { previousLatestStory };
+			},
+			onError: (_error, _variables, context) => {
+				if (context?.previousLatestStory !== undefined) {
+					queryClient.setQueryData(latestStoryQueryKey, context.previousLatestStory);
+				}
+			},
 			onSuccess: () => {
-				void queryClient.invalidateQueries({ queryKey: trpc.story.listVersions.queryKey({ chatId, storyId }) });
+				void queryClient.invalidateQueries({
+					queryKey: trpc.story.listVersions.queryKey({ chatId, storySlug }),
+				});
 				void queryClient.invalidateQueries({ queryKey: trpc.story.listAll.queryKey() });
+				void queryClient.invalidateQueries({ queryKey: latestStoryQueryKey });
 			},
 		}),
 	);
 
 	const handleSave = useCallback(() => {
 		const editor = tiptapEditorRef.current;
-		const hasVersionData = currentVersionTitle !== undefined && currentVersionCode !== undefined;
+		const hasVersionData = storyTitle !== undefined && currentVersionCode !== undefined;
 		if (!editor || !hasVersionData) {
 			return;
 		}
@@ -51,29 +72,29 @@ export const useStoryViewerVersionActions = ({
 
 		createVersionMutation.mutate({
 			chatId,
-			storyId,
-			title: currentVersionTitle,
+			storySlug,
+			title: storyTitle,
 			code: newCode,
 			action: 'replace',
 		});
 
 		setViewMode('preview');
-	}, [chatId, storyId, currentVersionTitle, currentVersionCode, tiptapEditorRef, createVersionMutation, setViewMode]);
+	}, [chatId, storySlug, storyTitle, currentVersionCode, tiptapEditorRef, createVersionMutation, setViewMode]);
 
 	const handleRestore = useCallback(() => {
-		const hasVersionData = currentVersionTitle !== undefined && currentVersionCode !== undefined;
+		const hasVersionData = storyTitle !== undefined && currentVersionCode !== undefined;
 		if (!hasVersionData || isViewingLatest) {
 			return;
 		}
 
 		createVersionMutation.mutate({
 			chatId,
-			storyId,
-			title: currentVersionTitle,
+			storySlug,
+			title: storyTitle,
 			code: currentVersionCode,
 			action: 'replace',
 		});
-	}, [chatId, storyId, currentVersionTitle, currentVersionCode, isViewingLatest, createVersionMutation]);
+	}, [chatId, storySlug, storyTitle, currentVersionCode, isViewingLatest, createVersionMutation]);
 
 	return {
 		handleSave,

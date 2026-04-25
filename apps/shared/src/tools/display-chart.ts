@@ -20,5 +20,6 @@ export const OutputSchema = z.object({
 export type Input = z.infer<typeof InputSchema>;
 export type Output = z.infer<typeof OutputSchema>;
 
-/** Stub type retained for upstream Stories compatibility. Charts use Plotly Python sandbox. */
+/** Stub types retained for upstream Stories compatibility. Charts use Plotly Python sandbox. */
 export type ChartType = string;
+export type XAxisType = string;

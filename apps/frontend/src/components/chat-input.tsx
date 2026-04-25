@@ -1,11 +1,15 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Link } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
+import { Plus, PencilRuler, Database, Image as ImageIcon, AlertTriangle } from 'lucide-react';
 import { Button, ChatButton, MicButton } from './ui/button';
 import { SlidingWaveform } from './chat-input-sliding-waveform';
-import { ChatPrompt } from './chat-input-prompt';
+import { ChatPrompt, STORY_MENTION_ID, DATABASE_MENTION_TRIGGER } from './chat-input-prompt';
 import { ChatInputModelSelect } from './chat-input-model-select';
 import { ChatInputMessageQueue } from './chat-input-message-queue';
+import { ChatInputImagePreview } from './chat-input-image-preview';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from './ui/dropdown-menu';
+import StoryIcon from './ui/story-icon';
 import type { PromptHandle, SelectedMention } from 'prompt-mentions';
 import type { FormEvent } from 'react';
 import type { AgentHelpers } from '@/hooks/use-agent';
@@ -16,8 +20,11 @@ import { trpc } from '@/main';
 import { useAgentContext } from '@/contexts/agent.provider';
 import { useRegisterSetChatInputCallback } from '@/contexts/set-chat-input-callback';
 import { useTranscribe } from '@/hooks/use-transcribe';
+import { useImageUpload } from '@/hooks/use-image-upload';
+import { parseBudgetError } from '@/lib/ai';
 import { cn } from '@/lib/utils';
 import { useChatId } from '@/hooks/use-chat-id';
+import { messageQueueStore } from '@/stores/chat-message-queue';
 
 type ChatInputBaseProps = {
 	promptRef: React.RefObject<PromptHandle | null>;
@@ -32,7 +39,7 @@ type ChatInputBaseProps = {
 type ChatInputInlineProps = {
 	className?: string;
 	initialText: string;
-	onCancel: () => void;
+	onCancel?: () => void;
 	onSubmitMessage: AgentHelpers['queueOrSendMessage'];
 };
 
@@ -73,8 +80,11 @@ function ChatInputBase({
 	allowQueueing,
 }: ChatInputBaseProps) {
 	const [inputText, setInputText] = useState('');
-	const { isRunning, stopAgent, isLoadingMessages, setMentions } = useAgentContext();
+	const { isRunning, stopAgent, isLoadingMessages, setMentions, submitQueuedMessageNow, error, selectedModel } =
+		useAgentContext();
 	const chatId = useChatId();
+	const imageUpload = useImageUpload();
+	const effectivePlaceholder = isRunning && allowQueueing ? 'Add a follow-up...' : placeholder;
 
 	const agentSettings = useQuery(trpc.project.getAgentSettings.queryOptions());
 	const transcribeModels = useQuery(trpc.project.getKnownTranscribeModels.queryOptions());
@@ -82,10 +92,78 @@ function ChatInputBase({
 	const hasTranscribeProvider = Object.values(transcribeModels.data ?? {}).some((p) => p.hasKey);
 	const isTranscribeReady = isTranscribeEnabled && hasTranscribeProvider;
 
+	const budgetStatus = useQuery({
+		...trpc.budget.checkBudgetStatus.queryOptions({ provider: selectedModel?.provider ?? 'openai' }),
+		enabled: !!selectedModel?.provider,
+		refetchOnWindowFocus: false,
+	});
+	const isBudgetExceeded = !!parseBudgetError(error) || budgetStatus.data?.level === 'exceeded';
+
 	const [micWarning, setMicWarning] = useState(false);
 	const micWarningTimer = useRef(0);
+	const dropZoneRef = useRef<HTMLDivElement>(null);
+	const [isDragging, setIsDragging] = useState(false);
 
 	useEffect(() => promptRef.current?.focus(), [chatId, promptRef]);
+
+	useEffect(() => {
+		const el = dropZoneRef.current;
+		if (!el) {
+			return;
+		}
+
+		let dragCounter = 0;
+
+		const handleDragEnter = (e: DragEvent) => {
+			e.preventDefault();
+			dragCounter++;
+			if (e.dataTransfer?.types.includes('Files')) {
+				setIsDragging(true);
+			}
+		};
+
+		const handleDragLeave = (e: DragEvent) => {
+			e.preventDefault();
+			dragCounter--;
+			if (dragCounter === 0) {
+				setIsDragging(false);
+			}
+		};
+
+		const handleDragOver = (e: DragEvent) => {
+			e.preventDefault();
+		};
+
+		const handleDrop = (e: DragEvent) => {
+			e.preventDefault();
+			dragCounter = 0;
+			setIsDragging(false);
+			if (e.dataTransfer?.files) {
+				imageUpload.addFiles(e.dataTransfer.files);
+			}
+		};
+
+		el.addEventListener('dragenter', handleDragEnter);
+		el.addEventListener('dragleave', handleDragLeave);
+		el.addEventListener('dragover', handleDragOver);
+		el.addEventListener('drop', handleDrop);
+		return () => {
+			el.removeEventListener('dragenter', handleDragEnter);
+			el.removeEventListener('dragleave', handleDragLeave);
+			el.removeEventListener('dragover', handleDragOver);
+			el.removeEventListener('drop', handleDrop);
+		};
+	}, [imageUpload.addFiles]); // eslint-disable-line
+
+	useEffect(() => {
+		const handler = (e: ClipboardEvent) => {
+			if (dropZoneRef.current?.contains(e.target as Node)) {
+				imageUpload.handlePaste(e);
+			}
+		};
+		document.addEventListener('paste', handler);
+		return () => document.removeEventListener('paste', handler);
+	}, [imageUpload.handlePaste]); // eslint-disable-line
 
 	const showMicWarning = useCallback(() => {
 		setMicWarning(true);
@@ -96,15 +174,43 @@ function ChatInputBase({
 	const submitMessage = useCallback(
 		async (text: string, currentMentions: SelectedMention[] = []) => {
 			const trimmedInput = text.trim();
-			if (!trimmedInput || (isRunning && !allowQueueing)) {
+			if (!trimmedInput && !imageUpload.hasImages) {
+				if (isRunning && allowQueueing) {
+					const queue = messageQueueStore.getSnapshot(chatId);
+					if (queue?.length) {
+						await submitQueuedMessageNow(queue[0].id);
+					}
+				}
 				return;
 			}
+
+			if ((isRunning && !allowQueueing) || isBudgetExceeded) {
+				return;
+			}
+
 			setMentions(currentMentions.map((m) => ({ id: m.id, label: m.label, trigger: m.trigger })));
 			promptRef.current?.clear();
 			setInputText('');
-			await onSubmitMessage({ text: trimmedInput });
+
+			const images = imageUpload.getImagesForUpload();
+			imageUpload.clearImages();
+
+			await onSubmitMessage({
+				text: trimmedInput || (images.length > 0 ? 'Describe this image' : ''),
+				images: images.length > 0 ? images : undefined,
+			});
 		},
-		[onSubmitMessage, isRunning, allowQueueing, setMentions, promptRef],
+		[
+			onSubmitMessage,
+			isRunning,
+			allowQueueing,
+			isBudgetExceeded,
+			setMentions,
+			promptRef,
+			imageUpload,
+			chatId,
+			submitQueuedMessageNow,
+		],
 	);
 
 	const {
@@ -130,19 +236,55 @@ function ChatInputBase({
 		const mentions = promptRef.current?.getMentions() ?? [];
 		await submitMessage(inputText, mentions);
 	};
-	const isInputEmpty = !inputText.trim();
+	const isInputEmpty = !inputText.trim() && !imageUpload.hasImages;
+
+	const skills = useQuery(trpc.skill.list.queryOptions());
+	const databaseObjects = useQuery(trpc.project.getDatabaseObjects.queryOptions());
+	const hasSkills = Boolean(skills.data?.length);
+	const hasDatabases = Boolean(databaseObjects.data?.length);
+
+	const handleEditQueuedMessage = useCallback(
+		(text: string) => {
+			promptRef.current?.clear();
+			promptRef.current?.insertText(text);
+			promptRef.current?.focus();
+		},
+		[promptRef],
+	);
+
+	const openSkillsMenu = useCallback(() => {
+		promptRef.current?.insertText('/');
+	}, [promptRef]);
+
+	const openDatabaseMenu = useCallback(() => {
+		promptRef.current?.insertText(DATABASE_MENTION_TRIGGER);
+	}, [promptRef]);
 
 	return (
-		<div className={cn('p-4 pt-0 max-w-3xl w-full mx-auto', className)}>
-			<ChatInputMessageQueue />
+		<div ref={dropZoneRef} className={cn('px-3 pb-3 pt-0 md:px-4 md:pb-4 max-w-3xl w-full mx-auto', className)}>
+			<ChatInputMessageQueue onEditMessage={handleEditQueuedMessage} onSubmitNow={submitQueuedMessageNow} />
+			<BudgetBanner />
 
 			<form onSubmit={handleSubmitMessage} className='mx-auto relative'>
-				<InputGroup htmlFor='chat-input'>
+				<InputGroup
+					htmlFor='chat-input'
+					className={cn('dark:bg-muted', isDragging && 'ring-2 ring-primary/50 border-primary')}
+				>
+					<ChatInputImagePreview images={imageUpload.images} onRemove={imageUpload.removeImage} />
 					<ChatPrompt
 						promptRef={promptRef}
-						placeholder={placeholder}
+						placeholder={effectivePlaceholder}
 						onChange={(value) => setInputText(value)}
 						onEnter={(value, mentions) => submitMessage(value, mentions)}
+					/>
+
+					<input
+						ref={imageUpload.fileInputRef}
+						type='file'
+						accept='image/png,image/jpeg,image/gif,image/webp'
+						multiple
+						className='hidden'
+						onChange={imageUpload.handleFileInputChange}
 					/>
 
 					<InputGroupAddon align='block-end'>
@@ -150,7 +292,22 @@ function ChatInputBase({
 
 						{isTranscribeReady && isRecording && <SlidingWaveform analyserRef={analyserRef} />}
 
-						<div className='flex items-center gap-2 ml-auto relative'>
+						<div className='flex items-center gap-1.5 md:gap-2 ml-auto relative'>
+							<ChatInputPlusMenu
+								hasDatabases={hasDatabases}
+								hasSkills={hasSkills}
+								onAddImage={imageUpload.openFilePicker}
+								onAddStory={() => {
+									promptRef.current?.appendMention(
+										{ id: STORY_MENTION_ID, label: 'Story mode' },
+										'#',
+									);
+								}}
+								onOpenSkills={openSkillsMenu}
+								onOpenDatabase={openDatabaseMenu}
+								onFocusPrompt={() => promptRef.current?.focus()}
+							/>
+
 							{onCancel && (
 								<Button variant='ghost' type='button' size='sm' onClick={onCancel}>
 									Cancel
@@ -170,14 +327,14 @@ function ChatInputBase({
 							{allowQueueing && isRunning ? (
 								<ChatButton
 									showStop={isInputEmpty}
-									disabled={false}
+									disabled={!isInputEmpty && isBudgetExceeded}
 									onClick={isInputEmpty ? stopAgent : handleSubmitMessage}
 									type='button'
 								/>
 							) : (
 								<ChatButton
 									showStop={isRunning}
-									disabled={isLoadingMessages || isInputEmpty}
+									disabled={isLoadingMessages || isInputEmpty || (!isRunning && isBudgetExceeded)}
 									onClick={isRunning ? stopAgent : handleSubmitMessage}
 									type='button'
 								/>
@@ -187,6 +344,106 @@ function ChatInputBase({
 				</InputGroup>
 			</form>
 		</div>
+	);
+}
+
+function BudgetBanner() {
+	const { error, clearError, selectedModel } = useAgentContext();
+	const prevProviderRef = useRef(selectedModel?.provider);
+
+	useEffect(() => {
+		const prev = prevProviderRef.current;
+		prevProviderRef.current = selectedModel?.provider;
+		if (prev && prev !== selectedModel?.provider && parseBudgetError(error)) {
+			clearError();
+		}
+	}, [selectedModel?.provider, error, clearError]);
+
+	const budgetStatus = useQuery({
+		...trpc.budget.checkBudgetStatus.queryOptions({ provider: selectedModel?.provider ?? 'openai' }),
+		enabled: !!selectedModel?.provider,
+		refetchOnWindowFocus: false,
+	});
+
+	const errorMessage = parseBudgetError(error);
+	const level = errorMessage ? 'exceeded' : (budgetStatus.data?.level ?? 'ok');
+	const proactiveMessage = level !== 'ok' ? budgetStatus.data?.message : null;
+	const message = errorMessage ?? proactiveMessage;
+
+	if (!message) {
+		return null;
+	}
+
+	const isExceeded = level === 'exceeded';
+
+	return (
+		<div className='mb-2 flex items-start gap-2.5 rounded-2xl border border-input/50 bg-muted/50 px-3 py-2.5 text-sm text-muted-foreground animate-in fade-in slide-in-from-bottom-2 duration-200'>
+			<AlertTriangle className={cn('size-4 shrink-0 mt-0.5', isExceeded ? 'text-red-500' : 'text-amber-500')} />
+			<p className='flex-1 min-w-0'>{message}</p>
+		</div>
+	);
+}
+
+function ChatInputPlusMenu({
+	hasDatabases,
+	hasSkills,
+	onAddImage,
+	onAddStory,
+	onOpenSkills,
+	onOpenDatabase,
+	onFocusPrompt,
+}: {
+	hasDatabases: boolean;
+	hasSkills: boolean;
+	onAddImage: () => void;
+	onAddStory: () => void;
+	onOpenSkills: () => void;
+	onOpenDatabase: () => void;
+	onFocusPrompt: () => void;
+}) {
+	return (
+		<DropdownMenu>
+			<DropdownMenuTrigger asChild>
+				<button
+					type='button'
+					aria-label='Add context'
+					className='inline-flex items-center justify-center rounded-full size-7 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors cursor-pointer'
+				>
+					<Plus className='size-4 transition-transform duration-200 [[data-state=open]_&]:rotate-45' />
+				</button>
+			</DropdownMenuTrigger>
+			<DropdownMenuContent
+				side='top'
+				align='start'
+				collisionPadding={12}
+				className='min-w-44'
+				onCloseAutoFocus={(e) => {
+					e.preventDefault();
+					requestAnimationFrame(onFocusPrompt);
+				}}
+			>
+				<DropdownMenuItem onSelect={onAddImage}>
+					<ImageIcon className='size-4' />
+					<span>Upload image</span>
+				</DropdownMenuItem>
+				{hasDatabases && (
+					<DropdownMenuItem onSelect={onOpenDatabase}>
+						<Database className='size-4' />
+						<span>Database tables</span>
+					</DropdownMenuItem>
+				)}
+				<DropdownMenuItem onSelect={onAddStory}>
+					<StoryIcon className='size-4' />
+					<span>Story mode</span>
+				</DropdownMenuItem>
+				{hasSkills && (
+					<DropdownMenuItem onSelect={onOpenSkills}>
+						<PencilRuler className='size-4' />
+						<span>Skills</span>
+					</DropdownMenuItem>
+				)}
+			</DropdownMenuContent>
+		</DropdownMenu>
 	);
 }
 

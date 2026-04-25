@@ -5,27 +5,27 @@ import StoryIcon from './ui/story-icon';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from './ui/dropdown-menu';
 import { StoryViewer } from '@/components/side-panel/story-viewer';
 import { useSidePanel } from '@/contexts/side-panel';
-import { useAgentContext } from '@/contexts/agent.provider';
+import { useOptionalAgentContext } from '@/contexts/agent.provider';
 import { findStories } from '@/lib/story.utils';
 
-export function StoryOpenButton() {
-	const { messages } = useAgentContext();
+export function StoryOpenButton({ variant = 'outline' }: { variant?: 'outline' | 'ghost' }) {
+	const agent = useOptionalAgentContext();
 	const { chatId } = useParams({ strict: false });
 	const { isVisible, open: openSidePanel } = useSidePanel();
-	const stories = useMemo(() => findStories(messages), [messages]);
+	const stories = useMemo(() => findStories(agent?.messages ?? []), [agent?.messages]);
 
-	if (stories.length === 0 || isVisible || !chatId) {
+	if (!agent || stories.length === 0 || isVisible || !chatId) {
 		return null;
 	}
 
-	const openStory = (storyId: string) => {
-		openSidePanel(<StoryViewer chatId={chatId} storyId={storyId} />, storyId);
+	const openStory = (storySlug: string) => {
+		openSidePanel(<StoryViewer chatId={chatId} storySlug={storySlug} />, storySlug);
 	};
 
 	if (stories.length === 1) {
 		return (
-			<Button variant='outline' size='icon-md' onClick={() => openStory(stories[0].id)} title={stories[0].title}>
-				<StoryIcon className='size-5' strokeWidth={1.5} />
+			<Button variant={variant} size='icon-sm' onClick={() => openStory(stories[0].id)} title={stories[0].title}>
+				<StoryIcon className='size-4 text-muted-foreground' strokeWidth={1.5} />
 			</Button>
 		);
 	}
@@ -33,8 +33,8 @@ export function StoryOpenButton() {
 	return (
 		<DropdownMenu>
 			<DropdownMenuTrigger asChild>
-				<Button variant='outline' size='icon-md' title='Open stories'>
-					<StoryIcon className='size-5' strokeWidth={1.5} />
+				<Button variant={variant} size='icon-sm' title='Open stories'>
+					<StoryIcon className='size-4 text-muted-foreground' strokeWidth={1.5} />
 				</Button>
 			</DropdownMenuTrigger>
 

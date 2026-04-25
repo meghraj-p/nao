@@ -1,26 +1,30 @@
 import { useState, useEffect, memo } from 'react';
 import { ToolCall } from './index';
-import type { CollapsiblePart } from '@/types/ai';
+import type { GroupablePart } from '@/types/ai';
 import { Expandable } from '@/components/ui/expandable';
 import { AssistantReasoning } from '@/components/chat-messages/assistant-reasoning';
+import { useChatView } from '@/contexts/chat-view';
 import { isReasoningPart } from '@/lib/ai';
 import { useToolGroupSummaryTitle } from '@/hooks/use-tool-group-summary-title';
 
 interface Props {
-	parts: CollapsiblePart[];
+	parts: GroupablePart[];
 	isSettled: boolean;
 }
 
 export const ToolCallsGroup = memo(({ parts, isSettled }: Props) => {
 	const isLoading = !isSettled;
-	const [isExpanded, setIsExpanded] = useState(isLoading);
+	const hasError = parts.some((p) => !isReasoningPart(p) && p.state === 'output-error');
+	const { expandOnError } = useChatView();
+	const [isExpanded, setIsExpanded] = useState(isLoading || (expandOnError && hasError));
 
 	useEffect(() => {
-		setIsExpanded(isLoading);
-	}, [isLoading]);
+		if (isLoading || (expandOnError && hasError)) {
+			setIsExpanded(true);
+		}
+	}, [isLoading, expandOnError, hasError]);
 
 	const title = useToolGroupSummaryTitle({ parts, isLoading });
-
 	return (
 		<Expandable
 			title={title}
