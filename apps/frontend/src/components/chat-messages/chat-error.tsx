@@ -13,12 +13,28 @@ type ParsedError = {
 	message?: string;
 };
 
+function extractString(value: unknown): string | undefined {
+	if (typeof value === 'string') {
+		return value || undefined;
+	}
+	if (value && typeof value === 'object') {
+		const obj = value as Record<string, unknown>;
+		const msg = obj.message ?? obj.msg ?? obj.error;
+		if (typeof msg === 'string') {
+			return msg || undefined;
+		}
+	}
+	return undefined;
+}
+
 function parseError(error: Error): ParsedError {
 	try {
-		const parsed = JSON.parse(error.message);
+		const parsed = JSON.parse(error.message) as Record<string, unknown>;
+		// Handle nested OpenAI-style errors: { type, error: { type, code, message, param } }
+		const nestedError = parsed.error && typeof parsed.error === 'object' ? parsed.error : null;
 		return {
-			error: parsed.error,
-			message: parsed.message,
+			error: nestedError ? undefined : extractString(parsed.error),
+			message: extractString(parsed.message) ?? extractString(nestedError) ?? extractString(parsed),
 		};
 	} catch {
 		return { message: error.message };
