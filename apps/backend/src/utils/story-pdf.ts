@@ -23,7 +23,8 @@ export async function generateStoryPdf(story: StoryInput, queryData: QueryDataMa
 	const page = await browser.newPage();
 
 	try {
-		await page.setContent(html, { waitUntil: 'domcontentloaded' });
+		await page.setContent(html, { waitUntil: 'networkidle0' });
+		await page.waitForFunction('window.__plotlyReady === true', { timeout: 15000 }).catch(() => {});
 		const pdfBuffer = await page.pdf({
 			format: 'A4',
 			printBackground: true,

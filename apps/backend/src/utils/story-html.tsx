@@ -1,13 +1,11 @@
-import { defaultColorFor, labelize } from '@nao/shared';
+import { buildPlotlyFigure } from '@nao/shared';
 import type { ParsedChartBlock, ParsedTableBlock, Segment } from '@nao/shared/story-segments';
 import { splitCodeIntoSegments } from '@nao/shared/story-segments';
 import { formatCellValue, isNumericColumn } from '@nao/shared/story-table-utils';
-import type { displayChart } from '@nao/shared/tools';
 import { marked, Renderer } from 'marked';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
-import { renderChartToSvg } from '../components/generate-chart';
 import type { QueryDataMap, StoryInput } from './story-download';
 
 const MAX_TABLE_ROWS = 10;
@@ -38,10 +36,11 @@ function StoryDocument({ title, children }: { title: string; children: React.Rea
 				<meta name='viewport' content='width=device-width,initial-scale=1' />
 				<title>{title}</title>
 				<style dangerouslySetInnerHTML={{ __html: DOCUMENT_STYLES }} />
+				<script src='https://cdn.plot.ly/plotly-2.35.2.min.js' defer />
 			</head>
 			<body>
 				{children}
-				<script dangerouslySetInnerHTML={{ __html: TOOLTIP_SCRIPT }} />
+				<script dangerouslySetInnerHTML={{ __html: PLOTLY_HYDRATION_SCRIPT }} />
 			</body>
 		</html>
 	);
@@ -120,53 +119,24 @@ function ChartBlock({ chart, queryData }: { chart: ParsedChartBlock; queryData: 
 	}
 
 	try {
-		const svg = renderChartToSvg({
-			config: toChartConfig(chart),
+		const figure = buildPlotlyFigure({
 			data: rows,
-			width: CHART_WIDTH,
-			height: CHART_HEIGHT,
-			margin: { top: 0, right: 0, bottom: 0, left: 0 },
-			includeLegend: false,
-		});
-		const chartData = JSON.stringify({
-			data: rows,
-			xAxisKey: chart.xAxisKey,
-			series: chart.series,
 			chartType: chart.chartType,
+			xAxisKey: chart.xAxisKey,
+			xAxisType: chart.xAxisType === 'number' ? 'number' : 'category',
+			series: chart.series,
+			title: chart.title || '',
 		});
 		return (
-			<div style={{ margin: '16px 0' }}>
-				<div
-					className='nao-chart'
-					style={{ textAlign: 'center', position: 'relative' }}
-					data-chart={chartData}
-					dangerouslySetInnerHTML={{ __html: svg }}
-				/>
-				{chart.chartType !== 'pie' && <ChartLegend series={chart.series} />}
-			</div>
+			<div
+				className='nao-plotly-chart'
+				style={{ width: '100%', height: CHART_HEIGHT, margin: '16px 0' }}
+				data-plotly-figure={JSON.stringify(figure)}
+			/>
 		);
 	} catch {
 		return <Placeholder label={chart.title || 'Chart'} message='Could not render chart' />;
 	}
-}
-
-function ChartLegend({ series }: { series: ParsedChartBlock['series'] }) {
-	return (
-		<div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16, paddingTop: 12 }}>
-			{series.map((s, i) => {
-				const color = s.color || defaultColorFor(s.data_key, i);
-				return (
-					<div
-						key={s.data_key}
-						style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#6b7280', fontSize: 12 }}
-					>
-						<div style={{ width: 8, height: 8, borderRadius: 2, flexShrink: 0, background: color }} />
-						{s.label || labelize(s.data_key)}
-					</div>
-				);
-			})}
-		</div>
-	);
 }
 
 function KpiCards({ chart, rows }: { chart: ParsedChartBlock; rows: Record<string, unknown>[] }) {
@@ -299,16 +269,6 @@ function Placeholder({ label, message }: { label: string; message: string }) {
 	);
 }
 
-function toChartConfig(chart: ParsedChartBlock) {
-	return {
-		chart_type: chart.chartType as displayChart.ChartType,
-		x_axis_key: chart.xAxisKey,
-		x_axis_type: chart.xAxisType as displayChart.XAxisType | null,
-		series: chart.series,
-		title: chart.title,
-	};
-}
-
 const DOCUMENT_STYLES = `
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;line-height:1.6;color:rgba(0,0,0,0.85);max-width:900px;margin:0 auto;padding:32px 24px}
 h1{font-size:20px;font-weight:700;margin:0 0 24px;color:#111827}
@@ -341,124 +301,24 @@ img{max-width:100%;height:auto;border-radius:4px;margin:8px 0}
 @media print{body{padding:0;max-width:none}.nao-tooltip{display:none}.nao-chart{break-inside:avoid}table{break-inside:avoid}div[style*="display:flex"]{break-inside:avoid}h1,h2,h3{break-after:avoid}svg{max-width:100%!important;height:auto!important}footer{break-inside:avoid}}
 `;
 
-const TOOLTIP_SCRIPT = `
+const PLOTLY_HYDRATION_SCRIPT = `
 (function(){
-	var PIE_COLORS=['#104e64','#f54900','#009689','#ffb900','#fe9a00'];
-	function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
-	function labelize(s){
-		var str=String(s);
-		if(/^\\d{4}-\\d{2}-\\d{2}/.test(str)){var d=new Date(str);if(!isNaN(d.getTime()))return escHtml(d.toLocaleDateString('en-US',{timeZone:'UTC'}))}
-		return escHtml(str.replace(/_/g,' ').replace(/\\b\\w/g,function(c){return c.toUpperCase()}))
+	function hydrate(){
+		if(typeof Plotly==='undefined'){setTimeout(hydrate,50);return}
+		var pending=document.querySelectorAll('.nao-plotly-chart[data-plotly-figure]');
+		var remaining=pending.length;
+		if(!remaining){window.__plotlyReady=true;return}
+		pending.forEach(function(el){
+			var raw=el.getAttribute('data-plotly-figure');
+			if(!raw){remaining--;if(!remaining)window.__plotlyReady=true;return}
+			try{
+				var fig=JSON.parse(raw);
+				Plotly.newPlot(el,fig.data,fig.layout,{responsive:true,displayModeBar:false,staticPlot:false}).then(function(){
+					remaining--;if(!remaining)window.__plotlyReady=true;
+				}).catch(function(){remaining--;if(!remaining)window.__plotlyReady=true});
+			}catch(e){remaining--;if(!remaining)window.__plotlyReady=true}
+		});
 	}
-	function formatVal(v){return escHtml(typeof v==='number'?v.toLocaleString():String(v!=null?v:''))}
-
-	document.querySelectorAll('.nao-chart').forEach(function(container){
-		var raw=container.getAttribute('data-chart');
-		if(!raw)return;
-		var cfg;try{cfg=JSON.parse(raw.replace(/&#39;/g,"'").replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&amp;/g,'&'))}catch(e){return}
-
-		var pieColorMap=null;
-		if(cfg.chartType==='pie'){
-			pieColorMap={};var ci=0;var seen={};
-			cfg.data.forEach(function(d){
-				var v=String(d[cfg.xAxisKey]!=null?d[cfg.xAxisKey]:'');
-				if(!seen[v]){seen[v]=true;pieColorMap[v]=PIE_COLORS[ci%PIE_COLORS.length];ci++}
-			});
-		}
-
-		var tip=document.createElement('div');
-		tip.className='nao-tooltip';
-		container.appendChild(tip);
-
-		var svg=container.querySelector('svg');
-		if(!svg)return;
-
-		var bars=svg.querySelectorAll('.recharts-bar-rectangle');
-		var areas=svg.querySelectorAll('.recharts-active-dot, .recharts-dot');
-		var shapes=bars.length?bars:areas;
-
-		if(cfg.chartType==='pie'){
-			var slices=svg.querySelectorAll('.recharts-pie-sector');
-			slices.forEach(function(el,i){
-				var row=cfg.data[i];
-				if(!row)return;
-				el.addEventListener('mouseenter',function(e){showTip(e,row)});
-				el.addEventListener('mousemove',function(e){moveTip(e)});
-				el.addEventListener('mouseleave',function(){hideTip()});
-			});
-		}else{
-			var cellCount=cfg.data.length;
-			if(bars.length>0){
-				bars.forEach(function(el,i){
-					var dataIndex=i%cellCount;
-					var row=cfg.data[dataIndex];
-					if(!row)return;
-					el.addEventListener('mouseenter',function(e){showTip(e,row)});
-					el.addEventListener('mousemove',function(e){moveTip(e)});
-					el.addEventListener('mouseleave',function(){hideTip()});
-				});
-			}
-			svg.addEventListener('mousemove',function(e){
-				if(bars.length>0)return;
-				var plotArea=svg.querySelector('.recharts-cartesian-grid')||svg.querySelector('.recharts-area');
-				if(!plotArea)return;
-				var pRect=plotArea.getBoundingClientRect();
-				var relX=(e.clientX-pRect.left)/pRect.width;
-				if(relX<0||relX>1){hideTip();return}
-				var idx=Math.round(relX*(cellCount-1));
-				idx=Math.max(0,Math.min(cellCount-1,idx));
-				var row=cfg.data[idx];
-				if(row){showTip(e,row);moveTip(e)}
-			});
-			svg.addEventListener('mouseleave',function(){hideTip()});
-		}
-
-		function showTip(e,row){
-			var label=row[cfg.xAxisKey];
-			var isPie=!!pieColorMap;
-			var html='<div class="nao-tooltip-label">'+(isPie?labelize(cfg.series[0]&&(cfg.series[0].label||cfg.series[0].data_key)||''):labelize(label!=null?label:''))+'</div>';
-			html+='<div class="nao-tooltip-rows">';
-			var numericValues=[];
-			cfg.series.forEach(function(s){
-				var color;
-				if(isPie){
-					color=pieColorMap[String(label!=null?label:'')]||PIE_COLORS[0];
-				}else{
-					color=s.color||'#2563eb';
-					if(color.startsWith('var('))color='#2563eb';
-				}
-				var val=row[s.data_key];
-				if(typeof val==='number')numericValues.push(val);
-				var rowName=isPie?labelize(label!=null?label:''):labelize(s.label||s.data_key);
-				html+='<div class="nao-tooltip-row">'
-					+'<span class="nao-tooltip-swatch" style="background:'+escHtml(color)+'"></span>'
-					+'<span class="nao-tooltip-name">'+rowName+'</span>'
-					+'<span class="nao-tooltip-value">'+formatVal(val)+'</span>'
-					+'</div>';
-			});
-			if(numericValues.length>1){
-				var total=numericValues.reduce(function(a,b){return a+b},0);
-				html+='<div class="nao-tooltip-total">'
-					+'<span class="nao-tooltip-name">Total</span>'
-					+'<span class="nao-tooltip-value">'+escHtml(total.toLocaleString())+'</span>'
-					+'</div>';
-			}
-			html+='</div>';
-			tip.innerHTML=html;
-			tip.classList.add('visible');
-			moveTip(e);
-		}
-
-		function moveTip(e){
-			var cr=container.getBoundingClientRect();
-			var x=e.clientX-cr.left+12;
-			var y=e.clientY-cr.top-10;
-			if(x+tip.offsetWidth>cr.width)x=e.clientX-cr.left-tip.offsetWidth-12;
-			tip.style.left=x+'px';
-			tip.style.top=y+'px';
-		}
-
-		function hideTip(){tip.classList.remove('visible')}
-	});
+	if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',hydrate)}else{hydrate()}
 })();
 `;

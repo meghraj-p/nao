@@ -14,7 +14,7 @@ export const chartRoutes = {
 		.query(async ({ input }) => {
 			const config = await getChartConfigByToolCallId(input.toolCallId);
 			const data = await getChartDataByQueryId(config.query_id);
-			const png = generateChartImage({ config, data });
+			const png = await generateChartImage({ config, data });
 			return png.toString('base64');
 		}),
 };

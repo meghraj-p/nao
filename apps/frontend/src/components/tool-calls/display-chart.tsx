@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Plot from 'react-plotly.js';
+import { buildPlotlyFigure, DEFAULT_COLORS, DEFAULT_THEME } from '@nao/shared';
 import { Skeleton } from '../ui/skeleton';
 import { TextShimmer } from '../ui/text-shimmer';
 import { ToolCallWrapper } from './tool-call-wrapper';
 import type { ToolCallComponentProps } from '.';
-import type { Data, Datum, Layout } from 'plotly.js';
 import { useTheme } from '@/contexts/theme.provider';
 
 export const DisplayChartToolCall = ({ toolPart }: ToolCallComponentProps<'display_chart'>) => {
@@ -47,8 +47,8 @@ export function ChartDisplay({ data, chartType, xAxisKey, xAxisType, series, tit
 	const resolvedColors = useMemo(() => getResolvedColors(), [theme]); // eslint-disable-line react-hooks/exhaustive-deps
 	const themeColors = useMemo(() => getThemeColors(), [theme]); // eslint-disable-line react-hooks/exhaustive-deps
 
-	const { plotData, layout } = useMemo(
-		() => buildPlotConfig({ data, chartType, xAxisKey, xAxisType, series, title, resolvedColors, themeColors }),
+	const { data: plotData, layout } = useMemo(
+		() => buildPlotlyFigure({ data, chartType, xAxisKey, xAxisType, series, title, resolvedColors, themeColors }),
 		[data, chartType, xAxisKey, xAxisType, series, title, resolvedColors, themeColors],
 	);
 
@@ -62,18 +62,14 @@ export function ChartDisplay({ data, chartType, xAxisKey, xAxisType, series, tit
 
 	return (
 		<Plot
-			data={plotData}
-			layout={layout}
+			data={plotData as unknown as Plotly.Data[]}
+			layout={layout as unknown as Partial<Plotly.Layout>}
 			config={{ responsive: true, displayModeBar: false }}
 			style={{ width: '100%', height: '100%' }}
 			useResizeHandler
 		/>
 	);
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 const CHART_CSS_VARS = ['--chart-1', '--chart-2', '--chart-3', '--chart-4', '--chart-5'] as const;
 
@@ -94,7 +90,7 @@ function getCssVar(styles: CSSStyleDeclaration, name: string, fallback: string):
 
 function getResolvedColors(): string[] {
 	if (typeof document === 'undefined') {
-		return ['#6366f1', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6'];
+		return DEFAULT_COLORS;
 	}
 	const styles = getComputedStyle(document.documentElement);
 	return CHART_CSS_VARS.map((v) => getCssVar(styles, v, '#6366f1'));
@@ -102,7 +98,7 @@ function getResolvedColors(): string[] {
 
 function getThemeColors() {
 	if (typeof document === 'undefined') {
-		return { background: '#ffffff', foreground: '#000000', mutedForeground: '#6b7280', border: '#e5e7eb' };
+		return DEFAULT_THEME;
 	}
 	const styles = getComputedStyle(document.documentElement);
 	return {
@@ -110,202 +106,6 @@ function getThemeColors() {
 		foreground: getCssVar(styles, '--foreground', '#000000'),
 		mutedForeground: getCssVar(styles, '--muted-foreground', '#6b7280'),
 		border: getCssVar(styles, '--border', '#e5e7eb'),
-	};
-}
-
-function resolveColor(raw: string | undefined, index: number, resolvedColors: string[]): string {
-	if (!raw) {
-		return resolvedColors[index % resolvedColors.length];
-	}
-	const varMatch = raw.match(/^var\(--chart-(\d+)\)$/);
-	if (varMatch) {
-		const idx = parseInt(varMatch[1], 10) - 1;
-		return resolvedColors[idx] ?? resolvedColors[0];
-	}
-	return raw;
-}
-
-function toNumeric(v: unknown): number {
-	return typeof v === 'number' ? v : Number(v) || 0;
-}
-
-function buildPlotConfig({
-	data,
-	chartType,
-	xAxisKey,
-	xAxisType,
-	series,
-	title,
-	resolvedColors,
-	themeColors,
-}: ChartDisplayProps & { resolvedColors: string[]; themeColors: ReturnType<typeof getThemeColors> }): {
-	plotData: Data[];
-	layout: Partial<Layout>;
-} {
-	const x = data.map((row) => row[xAxisKey] as Datum);
-	const traces = buildTraces({ chartType, data, x, series, resolvedColors });
-
-	const layout = buildLayout({ chartType, xAxisType, title, series, themeColors });
-
-	return { plotData: traces, layout };
-}
-
-function buildTraces({
-	chartType,
-	data,
-	x,
-	series,
-	resolvedColors,
-}: {
-	chartType: string;
-	data: Record<string, unknown>[];
-	x: Datum[];
-	series: ChartDisplayProps['series'];
-	resolvedColors: string[];
-}): Data[] {
-	const type = chartType.toLowerCase();
-
-	if (type === 'pie' || type === 'donut') {
-		const s = series[0];
-		if (!s) {
-			return [];
-		}
-		return [
-			{
-				type: 'pie' as const,
-				labels: x,
-				values: data.map((row) => toNumeric(row[s.data_key])),
-				hole: type === 'donut' ? 0.4 : 0,
-				marker: { colors: data.map((_, i) => resolvedColors[i % resolvedColors.length]) },
-				textinfo: 'label+percent',
-			} as Data,
-		];
-	}
-
-	if (type === 'heatmap') {
-		const s = series[0];
-		if (!s) {
-			return [];
-		}
-		const yKeys = series.map((si) => si.data_key);
-		const z = yKeys.map((key) => data.map((row) => toNumeric(row[key])));
-		return [
-			{
-				type: 'heatmap' as const,
-				x,
-				y: yKeys.map((k) => series.find((si) => si.data_key === k)?.label ?? k),
-				z,
-				colorscale: 'Viridis',
-			} as Data,
-		];
-	}
-
-	if (type === 'histogram') {
-		return series.map((s, i) => ({
-			type: 'histogram' as const,
-			x: data.map((row) => row[s.data_key] as Datum),
-			name: s.label ?? s.data_key,
-			marker: { color: resolveColor(s.color, i, resolvedColors) },
-		})) as Data[];
-	}
-
-	return series.map((s, i) => {
-		const color = resolveColor(s.color, i, resolvedColors);
-		const y = data.map((row) => toNumeric(row[s.data_key]));
-		const base = { x, y, name: s.label ?? s.data_key };
-
-		switch (type) {
-			case 'bar':
-			case 'column':
-			case 'grouped_column':
-			case 'stacked_bar':
-				return { ...base, type: 'bar' as const, marker: { color } } as Data;
-
-			case 'horizontal_bar':
-				return {
-					...base,
-					type: 'bar' as const,
-					orientation: 'h' as const,
-					x: y,
-					y: x,
-					marker: { color },
-				} as Data;
-
-			case 'line':
-				return { ...base, type: 'scatter' as const, mode: 'lines' as const, line: { color } } as Data;
-
-			case 'area':
-				return {
-					...base,
-					type: 'scatter' as const,
-					mode: 'lines' as const,
-					fill: 'tozeroy' as const,
-					line: { color },
-					fillcolor: color + '33',
-				} as Data;
-
-			case 'scatter':
-				return { ...base, type: 'scatter' as const, mode: 'markers' as const, marker: { color } } as Data;
-
-			default:
-				return { ...base, type: type as Data['type'], marker: { color } } as Data;
-		}
-	});
-}
-
-function buildLayout({
-	chartType,
-	xAxisType,
-	title,
-	series,
-	themeColors,
-}: {
-	chartType: string;
-	xAxisType: string;
-	title: string;
-	series: ChartDisplayProps['series'];
-	themeColors: ReturnType<typeof getThemeColors>;
-}): Partial<Layout> {
-	const type = chartType.toLowerCase();
-	const isPie = type === 'pie' || type === 'donut';
-
-	const base: Partial<Layout> = {
-		paper_bgcolor: 'transparent',
-		plot_bgcolor: themeColors.background,
-		font: { color: themeColors.foreground, size: 12 },
-		margin: { t: title ? 40 : 20, r: 20, b: 60, l: 60 },
-		autosize: true,
-		title: title ? { text: title, font: { size: 14, color: themeColors.foreground } } : undefined,
-		showlegend: series.length > 1 || isPie,
-		legend: { orientation: 'h', y: -0.15, yanchor: 'top', x: 0.5, xanchor: 'center' },
-	};
-
-	if (isPie) {
-		return base;
-	}
-
-	const axisBase = {
-		showgrid: true,
-		gridcolor: themeColors.border,
-		tickfont: { color: themeColors.mutedForeground },
-		zeroline: false,
-	};
-
-	return {
-		...base,
-		barmode:
-			type === 'stacked_bar'
-				? 'stack'
-				: type === 'bar' || type === 'column' || type === 'grouped_column' || type === 'horizontal_bar'
-					? 'group'
-					: undefined,
-		xaxis: {
-			...axisBase,
-			type: xAxisType === 'number' ? ('linear' as const) : ('-' as const),
-			automargin: true,
-			tickangle: -45,
-		},
-		yaxis: { ...axisBase, autorange: true, rangemode: 'normal', automargin: true },
 	};
 }
 

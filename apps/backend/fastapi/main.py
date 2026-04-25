@@ -17,7 +17,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -126,6 +126,13 @@ class ExecuteChartPythonRequest(BaseModel):
 class ExecuteChartPythonResponse(BaseModel):
     html: str
     computed_values: dict[str, str] = {}
+
+
+class RenderChartPngRequest(BaseModel):
+    python_code: str
+    data: list[dict]
+    width: int = 800
+    height: int = 500
 
 
 class HealthResponse(BaseModel):
@@ -363,13 +370,12 @@ async def execute_sql(request: ExecuteSQLRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/execute_chart_python", response_model=ExecuteChartPythonResponse)
-async def execute_chart_python(request: ExecuteChartPythonRequest):
-    validation_error = _validate_chart_code(request.python_code)
+async def _build_chart_figure(python_code: str, data: list[dict]) -> tuple["go.Figure", dict]:
+    validation_error = _validate_chart_code(python_code)
     if validation_error:
         raise HTTPException(status_code=400, detail=validation_error)
 
-    df = pd.DataFrame(request.data)
+    df = pd.DataFrame(data)
     namespace = {
         "__builtins__": SAFE_BUILTINS,
         "df": df,
@@ -384,7 +390,7 @@ async def execute_chart_python(request: ExecuteChartPythonRequest):
     }
 
     def _run_code():
-        exec(request.python_code, namespace)
+        exec(python_code, namespace)
 
     try:
         loop = asyncio.get_running_loop()
@@ -398,10 +404,7 @@ async def execute_chart_python(request: ExecuteChartPythonRequest):
             detail=f"Chart code execution timed out after {CHART_EXEC_TIMEOUT_SECS} seconds.",
         )
     except Exception:
-        raise HTTPException(
-            status_code=400,
-            detail=traceback.format_exc(),
-        )
+        raise HTTPException(status_code=400, detail=traceback.format_exc())
 
     fig = namespace.get("fig")
     if fig is None:
@@ -409,12 +412,18 @@ async def execute_chart_python(request: ExecuteChartPythonRequest):
             status_code=400,
             detail="Code must assign a plotly Figure to a variable named `fig`.",
         )
-
     if not isinstance(fig, go.Figure):
         raise HTTPException(
             status_code=400,
             detail=f"Variable `fig` must be a plotly Figure, got {type(fig).__name__}.",
         )
+
+    return fig, namespace
+
+
+@app.post("/execute_chart_python", response_model=ExecuteChartPythonResponse)
+async def execute_chart_python(request: ExecuteChartPythonRequest):
+    fig, namespace = await _build_chart_figure(request.python_code, request.data)
 
     try:
         html = fig.to_html(full_html=False, include_plotlyjs="cdn")
@@ -425,8 +434,26 @@ async def execute_chart_python(request: ExecuteChartPythonRequest):
         )
 
     computed_values = _extract_scalars(namespace)
-
     return ExecuteChartPythonResponse(html=html, computed_values=computed_values)
+
+
+@app.post("/render_chart_png")
+async def render_chart_png(request: RenderChartPngRequest):
+    fig, _ = await _build_chart_figure(request.python_code, request.data)
+
+    try:
+        loop = asyncio.get_running_loop()
+        png_bytes = await loop.run_in_executor(
+            _chart_executor,
+            lambda: fig.to_image(format="png", width=request.width, height=request.height),
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to render figure as PNG: {traceback.format_exc()}",
+        )
+
+    return Response(content=png_bytes, media_type="image/png")
 
 
 if __name__ == "__main__":

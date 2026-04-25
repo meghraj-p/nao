@@ -361,7 +361,7 @@ class TeamsService {
 			return;
 		}
 		try {
-			const png = generateChartImage({ config: part.input, data: sqlOutput.rows });
+			const png = await generateChartImage({ config: part.input, data: sqlOutput.rows });
 			state.renderedChartIds.add(part.toolCallId);
 
 			const chartId = await chartImageQueries.saveChart(part.toolCallId, png.toString('base64'));
