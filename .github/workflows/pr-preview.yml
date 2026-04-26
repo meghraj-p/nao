@@ -1,8 +1,9 @@
 name: PR Preview Deployment
 
 on:
-    pull_request_target:
-        types: [opened, synchronize, reopened, closed]
+    # pull_request_target:
+    #     types: [opened, synchronize, reopened, closed]
+    workflow_dispatch:
 
 permissions:
     contents: read

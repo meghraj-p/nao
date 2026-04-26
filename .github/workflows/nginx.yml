@@ -1,12 +1,13 @@
 name: Deploy nginx config
 
 on:
-    push:
-        branches:
-            - main
-        paths:
-            - 'nginx/nginx.conf'
-            - '.github/workflows/nginx.yml'
+    # push:
+    #     branches:
+    #         - main
+    #     paths:
+    #         - 'nginx/nginx.conf'
+    #         - '.github/workflows/nginx.yml'
+    workflow_dispatch:
 
 jobs:
     deploy:
