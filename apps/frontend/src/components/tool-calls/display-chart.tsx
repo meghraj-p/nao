@@ -121,7 +121,7 @@ function PlotlyIframe({ html }: { html: string }) {
 
 		const contentHeight = doc.documentElement.scrollHeight || doc.body.scrollHeight;
 		if (contentHeight > 0) {
-			setHeight(contentHeight);
+			setHeight((prev) => (prev === contentHeight ? prev : contentHeight));
 		}
 	}, []);
 
@@ -131,20 +131,13 @@ function PlotlyIframe({ html }: { html: string }) {
 			return;
 		}
 
-		let observer: ResizeObserver | undefined;
-
 		const handleLoad = () => {
 			syncHeight();
-			observer = new ResizeObserver(syncHeight);
-			if (iframe.contentDocument?.body) {
-				observer.observe(iframe.contentDocument.body);
-			}
 		};
 
 		iframe.addEventListener('load', handleLoad);
 		return () => {
 			iframe.removeEventListener('load', handleLoad);
-			observer?.disconnect();
 		};
 	}, [syncHeight]);
 

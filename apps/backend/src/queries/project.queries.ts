@@ -159,24 +159,23 @@ export const getProjectByUserId = async (
 	userId: string,
 	selectedProjectId?: string | null,
 ): Promise<DBProject | null> => {
-	if (isCloud) {
-		const projects = await listUserProjects(userId);
-		if (selectedProjectId) {
-			const selectedProject = projects.find((project) => project.id === selectedProjectId);
-			if (selectedProject) {
-				return selectedProject;
-			}
+	const projects = await listUserProjects(userId);
+	if (selectedProjectId) {
+		const selectedProject = projects.find((project) => project.id === selectedProjectId);
+		if (selectedProject) {
+			return selectedProject;
 		}
+	}
+
+	if (isCloud) {
 		return projects[0] ?? null;
 	}
 
-	const project = await getDefaultProject();
-	if (!project) {
+	const defaultProject = await getDefaultProject();
+	if (!defaultProject) {
 		return null;
 	}
-
-	const membership = await getProjectMember(project.id, userId);
-	return membership ? project : null;
+	return projects.find((p) => p.id === defaultProject.id) ?? null;
 };
 
 export const checkProjectHasMoreThanOneAdmin = async (projectId: string): Promise<boolean> => {
